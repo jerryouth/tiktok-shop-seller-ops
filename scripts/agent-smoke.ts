@@ -26,7 +26,8 @@ async function runCase(name: string, question: string): Promise<void> {
 }
 
 const cases: [string, string][] = [
-  ['库内检索', '帮我推荐利润率最高的2个商品'],
+  ['利润测算', '帮我算一下 P0001 能不能赚钱？毛利、净利、ROI、盈亏平衡广告成本都要'],
+  ['营销日历', '接下来两个月美国有什么营销节点？结合我们库里的商品，该提前备什么品？'],
   ['联网趋势', '现在 TikTok 美区什么产品比较火？看看咱们库里有没有对应的货'],
 ];
 

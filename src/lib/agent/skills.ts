@@ -11,6 +11,8 @@ import {
   type ListQuery,
   type ProductWithScore,
 } from '@/lib/types';
+import { computeUnitEconomics } from '@/lib/unit-economics';
+import { getUpcomingEvents } from './sources/calendar';
 import { fetchTrendSignals } from './sources/trends';
 import type { Skill, SkillContext } from './types';
 
@@ -253,6 +255,80 @@ const getHotTrendsSkill: Skill = {
   },
 };
 
+const calcUnitEconomicsSkill: Skill = {
+  name: 'calcUnitEconomics',
+  description: '测算单品利润模型（毛利/净利/ROI/盈亏平衡CPA）',
+  argsDoc:
+    '{ productId?: 商品ID（提供则自动取售价成本）, price?: 售价$, cost?: 采购成本$, weightKg?: 重量kg(默认0.3), adCpa?: 单均广告成本$(默认售价25%), returnRate?: 退货率0-1(默认0.08) }（productId 或 price+cost 至少给一组）',
+  async run(args) {
+    const pid = asString(args.productId);
+    let price = asNumber(args.price);
+    let cost = asNumber(args.cost);
+    if (pid) {
+      const p = getProductById(pid);
+      if (!p) throw new Error(`商品 ${pid} 不存在`);
+      price = price ?? p.price;
+      cost = cost ?? p.cost;
+    }
+    if (price === undefined || cost === undefined) {
+      throw new Error('需要提供 productId，或同时提供 price 与 cost');
+    }
+    const ue = computeUnitEconomics({
+      price,
+      cost,
+      weightKg: asNumber(args.weightKg),
+      adCpa: asNumber(args.adCpa),
+      returnRate: asNumber(args.returnRate),
+    });
+    return {
+      data: {
+        商品: pid ?? '自定义测算',
+        售价: `$${ue.price}`,
+        采购成本: `$${ue.cost}`,
+        物流费: `$${ue.shippingFee}`,
+        平台佣金: `$${ue.platformFee}`,
+        支付手续费: `$${ue.paymentFee}`,
+        单均广告成本: `$${ue.adCost}`,
+        退货损失: `$${ue.returnLoss}`,
+        毛利润: `$${ue.grossProfit}`,
+        毛利率: `${Math.round(ue.grossMargin * 100)}%`,
+        净利润: `$${ue.netProfit}`,
+        净利率: `${Math.round(ue.netMargin * 100)}%`,
+        ROI: `${ue.roi}%`,
+        盈亏平衡CPA: `$${ue.breakEvenCpa}`,
+        评级: ue.verdict,
+      },
+      summary: `毛利${Math.round(ue.grossMargin * 100)}% · ROI ${ue.roi}%`,
+    };
+  },
+};
+
+const getSeasonalCalendarSkill: Skill = {
+  name: 'getSeasonalCalendar',
+  description: '查询美国营销日历（节日节点/备货周期/文化洞察）',
+  argsDoc: '{ withinDays?: 天数范围(默认90，最大180) }（可选）',
+  async run(args) {
+    const days = Math.min(180, Math.max(7, asNumber(args.withinDays) ?? 90));
+    const events = getUpcomingEvents(new Date(), days);
+    return {
+      data: {
+        节点数: events.length,
+        节点: events.map((e) => ({
+          名称: e.name,
+          日期: e.dateLabel,
+          倒计时: e.daysUntil < 0 ? '进行中' : `${e.daysUntil}天后`,
+          建议提前备货: `${e.leadDays}天`,
+          备货紧迫: e.urgent,
+          热门品类: e.categories,
+          文化洞察: e.culture,
+          选品方向: e.productIdeas,
+        })),
+      },
+      summary: `未来${days}天 ${events.length} 个营销节点`,
+    };
+  },
+};
+
 /** Skill 注册表：新增工具只需在此登记，提示词文档自动同步 */
 const registry = new Map<string, Skill>(
   [
@@ -262,6 +338,8 @@ const registry = new Map<string, Skill>(
     getMarketOverviewSkill,
     compareProductsSkill,
     getHotTrendsSkill,
+    calcUnitEconomicsSkill,
+    getSeasonalCalendarSkill,
   ].map((s) => [s.name, s]),
 );
 

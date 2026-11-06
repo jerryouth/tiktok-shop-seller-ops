@@ -15,6 +15,8 @@ import {
   BarChart3,
   GitCompareArrows,
   Globe,
+  Calculator,
+  CalendarDays,
   Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -39,9 +41,9 @@ interface ChatMessage {
 
 const QUICK_PROMPTS = [
   '联网看看 TikTok 最近什么在爆，结合库里商品给建议',
-  '帮我推荐利润率最高的3个商品',
-  '美妆类目有什么值得做的？',
-  '对比下评分最高的两款商品',
+  '帮我测算 P0001 的利润、ROI 和盈亏平衡广告成本',
+  '接下来有什么美国营销节点？该提前备什么品？',
+  '库里哪些商品毛利够打广告？帮我筛一遍',
   '低竞争高利润的商品有哪些？',
 ];
 
@@ -53,6 +55,8 @@ const SKILL_ICONS: Record<string, typeof Database> = {
   getMarketOverview: BarChart3,
   compareProducts: GitCompareArrows,
   getHotTrends: Globe,
+  calcUnitEconomics: Calculator,
+  getSeasonalCalendar: CalendarDays,
 };
 
 function formatContent(text: string): string {
@@ -392,8 +396,8 @@ export function AiChat() {
                 <Sparkles className="h-4 w-4 text-[#00b8b0]" />
               </span>
               <div>
-                <p className="text-sm font-semibold text-zinc-900">AI 选品助手</p>
-                <p className="text-[11px] text-zinc-400">Agent · 联网趋势 × 商品库分析</p>
+                <p className="text-sm font-semibold text-zinc-900">老K · 选品总监</p>
+                <p className="text-[11px] text-zinc-400">Agent · 趋势 × 数据 × 利润测算</p>
               </div>
             </div>
             <div className="flex items-center gap-1">
@@ -424,10 +428,11 @@ export function AiChat() {
                   <Bot className="h-7 w-7 text-[#00b8b0]" />
                 </span>
                 <p className="mb-1.5 text-sm font-semibold text-zinc-900">
-                  AI 选品助手
+                  老K · 顶级选品总监
                 </p>
                 <p className="mb-6 max-w-[280px] text-center text-xs leading-relaxed text-zinc-400">
-                  我能联网检索 TikTok 实时趋势，结合商品库做交叉分析，用自然语言描述你的选品需求即可
+                  15 年跨境操盘手：懂数据、懂美国文化、懂 ROI
+                  和毛利。联网趋势 × 商品库 × 利润测算，直接给我你的选品问题
                 </p>
                 <div className="flex w-full max-w-[320px] flex-col gap-2">
                   {QUICK_PROMPTS.map((prompt) => (
