@@ -10,7 +10,9 @@ import {
   Download,
   ImagePlus,
   Layers,
+  Lightbulb,
   Loader2,
+  Plus,
   RefreshCw,
   ScanSearch,
   Shuffle,
@@ -25,6 +27,7 @@ import {
   type ImageElement,
   type ImageStructure,
   type RemixResult,
+  type SceneSuggestion,
 } from '@/lib/image-types';
 import type { PagedResult, ProductWithScore } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -40,7 +43,7 @@ interface SelectedImage {
 const STEP_DEFS = [
   { n: 1, label: '选择主图' },
   { n: 2, label: 'AI 解析结构' },
-  { n: 3, label: '重排并生成' },
+  { n: 3, label: '场景联想与生成' },
 ];
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -64,6 +67,10 @@ export default function ImageStudioPage() {
   const [structure, setStructure] = useState<ImageStructure | null>(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // ------- 场景联想 -------
+  const [scenes, setScenes] = useState<SceneSuggestion[]>([]);
+  const [loadingScenes, setLoadingScenes] = useState(false);
 
   // ------- 生成 -------
   const [extra, setExtra] = useState('');
@@ -99,6 +106,7 @@ export default function ImageStudioPage() {
   const pickLibrary = useCallback((p: ProductWithScore) => {
     setSelected({ preview: p.image, serverRef: p.image, name: p.name });
     setStructure(null);
+    setScenes([]);
     setResults([]);
     setActiveId(null);
   }, []);
@@ -116,6 +124,7 @@ export default function ImageStudioPage() {
       if (!res.ok || !json.url) throw new Error(json.error ?? '上传失败');
       setSelected({ preview: dataUrl, serverRef: json.url, name: file.name });
       setStructure(null);
+      setScenes([]);
       setResults([]);
       setActiveId(null);
       toast.success('图片已上传，可以开始解析');
@@ -124,6 +133,25 @@ export default function ImageStudioPage() {
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }, []);
+
+  /** 场景联想：基于解析结构让 AI 构思使用场景 */
+  const loadScenes = useCallback(async (s: ImageStructure) => {
+    setLoadingScenes(true);
+    try {
+      const res = await fetch('/api/image/scenes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ structure: s }),
+      });
+      const json = (await res.json()) as { scenes?: SceneSuggestion[]; error?: string };
+      if (!res.ok || !json.scenes) throw new Error(json.error ?? '场景联想失败');
+      setScenes(json.scenes);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : '场景联想失败');
+    } finally {
+      setLoadingScenes(false);
     }
   }, []);
 
@@ -143,15 +171,17 @@ export default function ImageStudioPage() {
         elements: json.structure.elements.map((e, i) => ({ ...e, id: `e${i + 1}` })),
       };
       setStructure(s);
+      setScenes([]);
       setResults([]);
       setActiveId(s.elements.find((e) => e.type === 'product')?.id ?? s.elements[0]?.id ?? null);
       toast.success(`识别完成：拆解出 ${s.elements.length} 个结构元素`);
+      void loadScenes(s);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '解析失败');
     } finally {
       setAnalyzing(false);
     }
-  }, [selected, analyzing]);
+  }, [selected, analyzing, loadScenes]);
 
   // ------- 结构编辑 -------
   const patchElement = useCallback((id: string, patch: Partial<ImageElement>) => {
@@ -179,6 +209,22 @@ export default function ImageStudioPage() {
       prev ? { ...prev, elements: prev.elements.filter((e) => e.id !== id) } : prev,
     );
     setActiveId((cur) => (cur === id ? null : cur));
+  }, []);
+
+  // ------- 场景编辑 -------
+  const patchScene = useCallback((id: string, patch: Partial<SceneSuggestion>) => {
+    setScenes((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  }, []);
+
+  const removeScene = useCallback((id: string) => {
+    setScenes((prev) => prev.filter((s) => s.id !== id));
+  }, []);
+
+  const addScene = useCallback(() => {
+    setScenes((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), name: '自定义场景', value: '', scene: '' },
+    ]);
   }, []);
 
   /** 一键打乱：除背景外的元素两两交换位置 */
@@ -248,24 +294,24 @@ export default function ImageStudioPage() {
 
   // ------- 生成与下载 -------
   const generate = useCallback(async () => {
-    if (!selected || !structure || generating) return;
+    if (!selected || !structure || scenes.length === 0 || generating) return;
     setGenerating(true);
     try {
       const res = await fetch('/api/image/remix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: selected.serverRef, structure, extra }),
+        body: JSON.stringify({ image: selected.serverRef, structure, scenes, extra }),
       });
       const json = (await res.json()) as { images?: RemixResult[]; error?: string };
       if (!res.ok || !json.images) throw new Error(json.error ?? '生成失败');
       setResults(json.images);
-      toast.success(`已生成 ${json.images.length} 张新主图`);
+      toast.success(`已生成 ${json.images.length} 张场景主图`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '生成失败');
     } finally {
       setGenerating(false);
     }
-  }, [selected, structure, extra, generating]);
+  }, [selected, structure, scenes, extra, generating]);
 
   const downloadImage = useCallback(async (url: string, variant: string, index: number) => {
     try {
@@ -580,16 +626,107 @@ export default function ImageStudioPage() {
             </div>
           )}
 
-          <div className="mt-3 space-y-2 border-t border-zinc-100 pt-3">
+          {structure && (
+            <p className="mt-3 border-t border-zinc-100 pt-3 text-[11px] leading-relaxed text-zinc-400">
+              拖动产品框可决定生成图中产品的摆放位置；到下方「场景联想」编辑场景后即可生成
+            </p>
+          )}
+        </section>
+      </div>
+
+      {/* 场景联想 */}
+      {structure && (
+        <section className="rounded-xl border border-zinc-200 bg-white p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="flex items-center gap-1.5 text-[15px] font-semibold text-zinc-900">
+                <Lightbulb className="h-4 w-4 text-[#f59e0b]" />
+                场景联想
+              </h2>
+              <p className="mt-0.5 text-[11px] text-zinc-400">
+                每个场景暗示一个产品价值点，生成图不含任何文字——靠画面本身打动买家
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="outline" onClick={addScene}>
+                <Plus className="h-3.5 w-3.5" />
+                自定义场景
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={loadingScenes}
+                onClick={() => void loadScenes(structure)}
+              >
+                <RefreshCw className={cn('h-3.5 w-3.5', loadingScenes && 'animate-spin')} />
+                换一批
+              </Button>
+            </div>
+          </div>
+
+          {loadingScenes && scenes.length === 0 ? (
+            <div className="grid gap-3 sm:grid-cols-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex h-36 flex-col items-center justify-center gap-2 rounded-lg bg-zinc-50 text-zinc-400"
+                >
+                  <Loader2 className="h-5 w-5 animate-spin text-[#f59e0b]" />
+                  <p className="text-xs">AI 正在联想使用场景…</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-3">
+              {scenes.map((s) => (
+                <div
+                  key={s.id}
+                  className="rounded-lg border border-zinc-200 p-3 transition-colors duration-150 hover:border-zinc-300"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      value={s.name}
+                      onChange={(e) => patchScene(s.id, { name: e.target.value })}
+                      placeholder="场景名"
+                      className="h-7 flex-1 border-0 bg-transparent px-1 text-[13px] font-semibold shadow-none focus-visible:ring-1"
+                    />
+                    <button
+                      type="button"
+                      aria-label="删除场景"
+                      onClick={() => removeScene(s.id)}
+                      className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-[#fe2c55]"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <Input
+                    value={s.value}
+                    onChange={(e) => patchScene(s.id, { value: e.target.value })}
+                    placeholder="暗示的价值点，如：随时随地保持精致"
+                    className="mt-1 h-7 border-0 bg-amber-50 px-2 text-[11px] text-amber-700 shadow-none placeholder:text-amber-400 focus-visible:ring-1"
+                  />
+                  <textarea
+                    value={s.scene}
+                    onChange={(e) => patchScene(s.id, { scene: e.target.value })}
+                    placeholder="画面描述：环境 / 光线 / 道具 / 氛围"
+                    rows={4}
+                    className="mt-2 w-full resize-none rounded-md border border-zinc-200 bg-white px-2 py-1.5 text-xs leading-relaxed text-zinc-700 outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-1 focus:ring-zinc-200"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-zinc-100 pt-3">
             <Input
               value={extra}
               onChange={(e) => setExtra(e.target.value)}
-              placeholder='额外要求（可选），如：加"限时5折"促销标签'
-              className="h-8 text-xs shadow-none"
+              placeholder="额外要求（可选），如：整体偏暖色调、加入圣诞元素"
+              className="h-9 min-w-[220px] flex-1 text-xs shadow-none"
             />
             <Button
-              className="w-full bg-[#fe2c55] text-white hover:bg-[#e6254c]"
-              disabled={!structure || generating}
+              className="bg-[#fe2c55] text-white hover:bg-[#e6254c]"
+              disabled={scenes.length === 0 || generating}
               onClick={generate}
             >
               {generating ? (
@@ -597,11 +734,13 @@ export default function ImageStudioPage() {
               ) : (
                 <Sparkles className="h-4 w-4" />
               )}
-              {generating ? '正在生成新主图（约 30 秒）…' : '按当前布局生成 3 张新主图'}
+              {generating
+                ? '正在生成场景主图（4K，约 1 分钟）…'
+                : `按场景生成 ${scenes.length} 张主图（4K 无文字）`}
             </Button>
           </div>
         </section>
-      </div>
+      )}
 
       {/* 生成结果 */}
       {(results.length > 0 || generating) && (
@@ -609,7 +748,7 @@ export default function ImageStudioPage() {
           <h2 className="mb-3 text-[15px] font-semibold text-zinc-900">生成结果</h2>
           <div className="grid gap-3 sm:grid-cols-3">
             {generating &&
-              Array.from({ length: 3 }).map((_, i) => (
+              Array.from({ length: scenes.length || 3 }).map((_, i) => (
                 <div
                   key={i}
                   className="flex aspect-square flex-col items-center justify-center gap-2 rounded-lg bg-zinc-50 text-zinc-400"
@@ -627,7 +766,12 @@ export default function ImageStudioPage() {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={r.url} alt={r.variant} className="block aspect-square w-full object-cover" />
                   <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/60 to-transparent px-3 pt-8 pb-2">
-                    <span className="text-xs font-medium text-white">{r.variant}</span>
+                    <div className="min-w-0">
+                      <span className="text-xs font-medium text-white">{r.variant}</span>
+                      {r.value && (
+                        <p className="truncate text-[10px] text-white/75">{r.value}</p>
+                      )}
+                    </div>
                     <Button
                       size="sm"
                       variant="secondary"
@@ -642,7 +786,7 @@ export default function ImageStudioPage() {
               ))}
           </div>
           <p className="mt-2 text-[11px] text-zinc-400">
-            生成图为 2K 分辨率，可直接用于 TikTok Shop Listing；不满意可调整布局或描述后重新生成
+            生成图为 4K 分辨率生活方式场景图，可直接用于 TikTok Shop Listing 与详情页；不满意可编辑场景描述后重新生成
           </p>
         </section>
       )}

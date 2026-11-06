@@ -2,7 +2,7 @@
 // 用法：pnpm tsx scripts/image-studio-smoke.ts
 import { promises as fs } from 'fs';
 import path from 'path';
-import { buildRemixPrompts, remixImage } from '../src/lib/image-studio';
+import { buildScenePrompts, remixImage, suggestScenes } from '../src/lib/image-studio';
 import type { ImageStructure, RemixResult } from '../src/lib/image-types';
 
 const PORT = process.env.DEPLOY_RUN_PORT ?? '5000';
@@ -51,12 +51,20 @@ async function main(): Promise<void> {
     if (el.bbox[2] <= 0 || el.bbox[3] <= 0) throw new Error(`退化 bbox 未被过滤: ${el.name}`);
   }
 
-  // 4. 重排 prompt + 图生图（参考图 = 上传图的公网 URL，复刻用户失败场景）
-  console.log('\n========== 4. 图生图（上传图回源）==========');
-  const shuffled = { ...structure, elements: [...structure.elements].reverse() };
-  const prompts = buildRemixPrompts(shuffled);
-  console.log(`变体数：${prompts.length}，参考图：${publicUrl.slice(0, 80)}...`);
-  const results: RemixResult[] = await remixImage(publicUrl, shuffled, undefined, {});
+  // 4. AI 场景联想（直接调核心库，HTTP 层逻辑与 analyze 一致）
+  console.log('\n========== 4. AI 场景联想 ==========');
+  const scenes = await suggestScenes(structure, {});
+  for (const s of scenes) {
+    console.log(`  「${s.name}」暗示价值：${s.value}`);
+    console.log(`    画面：${s.scene}`);
+  }
+  if (scenes.length === 0) throw new Error('场景联想为空');
+
+  // 5. 场景化 prompt + 图生图（参考图 = 上传图的公网 URL，复刻用户真实链路）
+  console.log('\n========== 5. 场景图生图（4K 无文字，上传图回源）==========');
+  const prompts = buildScenePrompts(structure, scenes);
+  for (const p of prompts) console.log(`  [${p.variant}] ${p.prompt.split('\n')[0]}`);
+  const results: RemixResult[] = await remixImage(publicUrl, structure, scenes, undefined, {});
   for (const r of results) console.log(`  [${r.variant}] ${r.url.slice(0, 90)}...`);
 
   console.log('\n全部通过');

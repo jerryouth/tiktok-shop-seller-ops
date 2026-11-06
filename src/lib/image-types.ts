@@ -25,10 +25,23 @@ export interface ImageStructure {
   elements: ImageElement[];
 }
 
+/** AI 联想的使用场景（暗示产品价值，驱动场景化图生图） */
+export interface SceneSuggestion {
+  id: string;
+  /** 场景短名，如「晨间通勤」 */
+  name: string;
+  /** 画面暗示的产品价值点 */
+  value: string;
+  /** 具体画面描述：环境/光线/道具/氛围 */
+  scene: string;
+}
+
 /** 生成结果 */
 export interface RemixResult {
   url: string;
   variant: string;
+  /** 该图暗示的价值点（场景模式下有值） */
+  value?: string;
 }
 
 /** 元素类型元数据（标签 + 标记色，与 DESIGN.md 图表色板一致） */

@@ -3,11 +3,11 @@
 import { Config, ImageGenerationClient, LLMClient } from 'coze-coding-dev-sdk';
 import {
   ELEMENT_TYPES,
-  TYPE_META,
   type ElementType,
   type ImageElement,
   type ImageStructure,
   type RemixResult,
+  type SceneSuggestion,
 } from './image-types';
 
 const VISION_MODEL = 'doubao-seed-2-0-pro-260215';
@@ -156,7 +156,67 @@ export async function analyzeImage(
 }
 
 // ---------------------------------------------------------------------------
-// 2. 布局重排 → 图生图 prompt 构建
+// 2. 场景联想：LLM 基于产品构思使用场景（画面暗示价值，而非文字卖点）
+// ---------------------------------------------------------------------------
+
+const SCENE_SYSTEM_PROMPT = `你是顶级电商视觉创意总监，擅长用生活方式场景为产品"讲故事"：不依赖任何文字标语，只靠画面元素让目标用户一眼感受到产品带来的价值，产生代入感和购买欲。`;
+
+interface RawScene {
+  name?: unknown;
+  value?: unknown;
+  scene?: unknown;
+}
+
+function sanitizeScene(raw: RawScene, index: number): SceneSuggestion | null {
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const value = typeof raw.value === 'string' ? raw.value.trim() : '';
+  const scene = typeof raw.scene === 'string' ? raw.scene.trim() : '';
+  if (!name || !scene) return null;
+  return { id: `s${index + 1}`, name, value: value || name, scene };
+}
+
+/** 基于产品结构，联想 3 个差异化的真实使用场景 */
+export async function suggestScenes(
+  structure: ImageStructure,
+  headers?: Record<string, string>,
+): Promise<SceneSuggestion[]> {
+  assertImageStudioReady();
+  const client = new LLMClient(new Config(), headers);
+  const product = structure.elements.find((e) => e.type === 'product');
+  const response = await client.invoke(
+    [
+      { role: 'system', content: SCENE_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `产品名称：${structure.productName}
+产品特征：${product?.description || '见参考图'}
+原图风格：${structure.style || '电商摄影'}
+
+请为该产品构思 3 个互不重复的真实使用场景，用于拍摄电商场景主图。每个场景必须：
+1. 具体可拍：环境、光线、氛围、搭配道具都能直接视觉化，避免空泛形容词堆砌
+2. 暗示价值：不写任何文字标语，只靠画面元素让用户感受到产品带来的好处
+3. 差异明显：覆盖不同的时间、空间或人群情绪（例如晨间/夜晚、居家/户外、独处/社交）
+
+严格 JSON 返回（不要 markdown 代码块）：
+{"scenes":[{"name":"场景短名(2-6字)","value":"画面暗示的价值点(12字内)","scene":"画面描述(50-80字，含环境/光线/道具/氛围)"}]}`,
+      },
+    ],
+    { model: VISION_MODEL, temperature: 0.75 },
+  );
+  const parsed = extractJson(response.content);
+  const rawScenes = Array.isArray(parsed.scenes) ? (parsed.scenes as RawScene[]) : [];
+  const scenes = rawScenes
+    .map((s, i) => sanitizeScene(s, i))
+    .filter((s): s is SceneSuggestion => s !== null)
+    .slice(0, 4);
+  if (scenes.length === 0) {
+    throw new Error('场景联想失败，请重试');
+  }
+  return scenes;
+}
+
+// ---------------------------------------------------------------------------
+// 3. 场景化图生图 prompt 构建
 // ---------------------------------------------------------------------------
 
 /** bbox 中心点 → 中文方位词 */
@@ -171,62 +231,51 @@ export function posWord(bbox: [number, number, number, number]): string {
   return `画面${v}${h}角区域`;
 }
 
-function describeLayout(elements: ImageElement[]): string {
-  return elements
-    .map((e) => {
-      const label = TYPE_META[e.type].label;
-      const pos = posWord(e.bbox);
-      const areaPct = Math.round(e.bbox[2] * e.bbox[3] * 100);
-      if (e.type === 'text') {
-        return `- ${label}「${e.name}」：文案内容为"${e.description}"，位于${pos}，字体醒目清晰`;
-      }
-      if (e.type === 'product') {
-        return `- ${label}「${e.name}」：${e.description}，位于${pos}，是视觉焦点，约占画面${areaPct}%`;
-      }
-      return `- ${label}「${e.name}」：${e.description}，位于${pos}，约占画面${areaPct}%`;
-    })
-    .join('\n');
-}
-
-/** 基于重排后的结构，构建 3 个风格变体的图生图 prompt */
-export function buildRemixPrompts(
+/** 基于使用场景构建图生图 prompt（每个场景一张，画面无文字） */
+export function buildScenePrompts(
   structure: ImageStructure,
+  scenes: SceneSuggestion[],
   extra?: string,
-): { prompt: string; variant: string }[] {
-  const layout = describeLayout(structure.elements);
+): { prompt: string; variant: string; value: string }[] {
+  const product = structure.elements.find((e) => e.type === 'product');
+  const productDesc = product?.description || structure.productName;
+  const pos = product ? posWord(product.bbox) : '画面正中央';
   const extraLine = extra?.trim() ? `\n用户额外要求：${extra.trim()}` : '';
-  const base = `电商商品主图：${structure.productName}。
-请严格保持参考图中产品的外观、颜色、材质与细节完全一致，但按以下新布局重新编排画面结构：
-${layout}
-整体风格：${structure.style || '专业电商摄影'}；${structure.composition || '构图均衡'}。${extraLine}
-通用要求：TikTok Shop 高转化主图，正方形构图，画面干净专业，产品质感突出，光影真实，文字元素必须为清晰可读的准确中文，不得出现乱码。`;
-
-  return [
-    { variant: '极简白底版', prompt: `${base}\n本张风格：纯净浅灰白背景，极简留白，突出产品本身。` },
-    { variant: '场景氛围版', prompt: `${base}\n本张风格：生活方式场景氛围，柔和自然光影，背景有代入感但不喧宾夺主。` },
-    { variant: '卖点冲击版', prompt: `${base}\n本张风格：视觉冲击力更强，色彩对比明快，卖点文字与角标更醒目，适合广告投放素材。` },
-  ];
+  return scenes.map((s) => ({
+    variant: s.name,
+    value: s.value,
+    prompt: `高端生活方式电商摄影：${structure.productName}（${productDesc}）。
+严格保持参考图中产品的外观、颜色、材质、形状与细节完全一致，将产品自然融入以下真实使用场景，产品位于${pos}，始终是画面的视觉焦点：
+场景画面：${s.scene}
+画面要无声地传达产品价值：${s.value}，让目标用户一眼产生"这就是我想要的生活"的代入感。
+摄影要求：杂志级生活方式摄影质感，自然真实的光影层次，浅景深背景适度虚化，构图高级有呼吸感，色调和谐统一，正方形构图。${extraLine}
+硬性要求：画面中不要出现任何文字、字母、数字、标签、logo 或水印。`,
+  }));
 }
 
 // ---------------------------------------------------------------------------
-// 3. 图生图执行
+// 4. 图生图执行
 // ---------------------------------------------------------------------------
 
-/** 以原图为参考，按重排布局批量生成新主图（允许部分变体失败，全部失败才抛错） */
+/** 以原图为参考，按使用场景批量生成场景化主图（允许部分失败，全部失败才抛错） */
 export async function remixImage(
   referenceImageUrl: string,
   structure: ImageStructure,
+  scenes: SceneSuggestion[],
   extra: string | undefined,
   headers: Record<string, string>,
 ): Promise<RemixResult[]> {
   assertImageStudioReady();
+  if (scenes.length === 0) {
+    throw new Error('请至少保留一个使用场景');
+  }
   const client = new ImageGenerationClient(new Config(), headers);
-  const variants = buildRemixPrompts(structure, extra);
+  const variants = buildScenePrompts(structure, scenes, extra);
   const responses = await client.batchGenerate(
     variants.map((v) => ({
       prompt: v.prompt,
       image: referenceImageUrl,
-      size: '2K',
+      size: '4K',
       responseFormat: 'url' as const,
       watermark: false,
     })),
@@ -238,7 +287,8 @@ export async function remixImage(
     if (helper.success && helper.imageUrls.length > 0) {
       results.push({
         url: helper.imageUrls[0],
-        variant: variants[i]?.variant ?? `变体 ${i + 1}`,
+        variant: variants[i]?.variant ?? `场景 ${i + 1}`,
+        value: variants[i]?.value,
       });
     } else {
       const msg = resp.error?.message ?? helper.errorMessages.join('; ');
