@@ -17,6 +17,7 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 1. **选品库**（`/products`）：表格（图片/名称/类目/售价/销量/评分/7日增幅/上架时间/选品评分）、关键词防抖搜索、类目/价格/销量/评分/分数组合筛选、6 字段排序、分页、批量删除、新增商品对话框、CSV 批量导入、商品详情抽屉（雷达图 + 近 14 天销量 + 推荐理由）。
 2. **智能选品评分**（`src/lib/scoring.ts`）：热度 25% + 利润 25% + 销量 20% + 竞争环境 15% + 增长势头 15%，0-100 分；≥85 标注「潜力爆款」；自动生成中文推荐理由（评级开场 → 核心优势 → 风险提示 → 运营建议）。
 3. **市场趋势看板**（`/`）：4 张统计卡片、热销品类条形图、近 14 天销量折线、飙升商品榜（近 7 天增幅 TOP6）、评分分布环形饼图。
+4. **AI 选品 Agent**（`src/lib/agent/` + `/api/chat`）：自然语言对话选品，ReAct 多跳推理（协议式工具调用，非原生 function calling）。模型输出 `<tool_call>{"skill":"...","args":{...}}</tool_call>` → runner 解析执行 Skill → `<tool_result>` 注入观察 → 循环至产出最终回答（最多 5 轮）。6 个 Skill 薄封装 store/趋势源：queryProducts、getProductDetail、getCategoryInsights、getMarketOverview、compareProducts、getHotTrends（联网趋势）。模型：doubao-seed-2-0-pro-260215。SSE 事件协议：skill_start / skill_end / content / done / error。前端 `ai-chat.tsx` 悬浮面板（右下角）：流式打字机渲染、[PRODUCT:id] 内联商品卡片、Agent 执行步骤可视化、跨 chunk SSE 行缓冲。
 
 ## 目录结构
 
@@ -31,13 +32,22 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 │   │       ├── products/route.ts         # GET 列表 / POST 新增 / DELETE 批量
 │   │       ├── products/[id]/route.ts    # GET 详情 / DELETE 单个
 │   │       ├── products/import/route.ts  # POST CSV 导入
-│   │       └── stats/route.ts            # GET 看板统计
+│   │       ├── stats/route.ts            # GET 看板统计
+│   │       └── chat/route.ts             # POST AI Agent 对话（SSE 流式）
 │   ├── components/
-│   │   ├── app-shell.tsx         # 深色侧边栏布局（移动端 Sheet 抽屉）
+│   │   ├── app-shell.tsx         # 深色侧边栏布局（移动端 Sheet 抽屉，挂载 AiChat）
+│   │   ├── ai-chat.tsx           # AI 选品 Agent 悬浮聊天面板
 │   │   ├── echart.tsx            # ECharts 通用封装（自动 resize）
 │   │   ├── score-badge.tsx       # 评分徽章 + 潜力爆款标识
 │   │   ├── product-form-dialog.tsx / import-dialog.tsx / product-detail-drawer.tsx
 │   │   └── ui/                   # shadcn/ui 组件库
+│   ├── lib/agent/
+│   │   ├── types.ts              # Skill / AgentEvent 类型
+│   │   ├── skills.ts             # 6 个 Skill 实现 + 注册表（新增工具在此登记）
+│   │   ├── prompts.ts            # 系统提示词（工具协议 + Skill 文档自动生成）
+│   │   ├── runner.ts             # ReAct 循环（窥探流前缀判定工具调用/最终回答）
+│   │   └── sources/trends.ts     # 趋势数据源适配器层（WebSearch 实现，可插拔 Kalodata/EchoTik）
+├── scripts/agent-smoke.ts        # Agent E2E 冒烟脚本（pnpm tsx scripts/agent-smoke.ts）
 │   └── lib/
 │       ├── types.ts              # 全局类型（Product / ScoreResult / DashboardStats…）
 │       ├── scoring.ts            # 评分引擎（维度加权 + 推荐理由生成）

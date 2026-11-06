@@ -2,30 +2,93 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
-import { Bot, Send, X, Sparkles, Loader2, RotateCcw } from 'lucide-react';
+import {
+  Bot,
+  Send,
+  X,
+  Sparkles,
+  Loader2,
+  RotateCcw,
+  Database,
+  PackageSearch,
+  PieChart,
+  BarChart3,
+  GitCompareArrows,
+  Globe,
+  Check,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import type { ProductWithScore } from '@/lib/types';
+
+/** Agent 执行步骤（Skill 调用轨迹） */
+interface SkillStep {
+  skill: string;
+  label: string;
+  summary?: string;
+  status: 'running' | 'done';
+}
 
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   streaming?: boolean;
+  steps?: SkillStep[];
 }
 
 const QUICK_PROMPTS = [
+  '联网看看 TikTok 最近什么在爆，结合库里商品给建议',
   '帮我推荐利润率最高的3个商品',
-  '哪些商品是潜力爆款？',
   '美妆类目有什么值得做的？',
-  '帮我分析增长最快的商品',
+  '对比下评分最高的两款商品',
   '低竞争高利润的商品有哪些？',
 ];
 
+/** Skill 名称 → 图标 */
+const SKILL_ICONS: Record<string, typeof Database> = {
+  queryProducts: Database,
+  getProductDetail: PackageSearch,
+  getCategoryInsights: PieChart,
+  getMarketOverview: BarChart3,
+  compareProducts: GitCompareArrows,
+  getHotTrends: Globe,
+};
+
 function formatContent(text: string): string {
-  return text
-    .replace(/\n/g, '<br/>')
-    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  return (
+    text
+      // 安全网：剥除可能泄漏的工具协议标记
+      .replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, '')
+      .replace(/<tool_result[\s\S]*?(<\/tool_result>|$)/g, '')
+      .replace(/\n/g, '<br/>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+  );
+}
+
+/** Agent 执行步骤可视化 */
+function SkillSteps({ steps }: { steps: SkillStep[] }) {
+  return (
+    <div className="mb-2 space-y-1 rounded-lg border border-zinc-100 bg-zinc-50/80 px-2.5 py-2">
+      {steps.map((s, i) => {
+        const Icon = SKILL_ICONS[s.skill] ?? Database;
+        return (
+          <div key={i} className="flex items-center gap-1.5 text-[11px]">
+            {s.status === 'running' ? (
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin text-[#00b8b0]" />
+            ) : (
+              <Check className="h-3 w-3 shrink-0 text-[#00b8b0]" />
+            )}
+            <Icon className="h-3 w-3 shrink-0 text-zinc-400" />
+            <span className="text-zinc-500">{s.label}</span>
+            {s.summary && (
+              <span className="truncate text-zinc-400">· {s.summary}</span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /** 将消息内容按 [PRODUCT:id] 标记拆分，商品部分渲染为卡片 */
@@ -193,28 +256,56 @@ export function AiChat() {
 
         const decoder = new TextDecoder();
         let accumulated = '';
+        let steps: SkillStep[] = [];
+        let sseBuffer = '';
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+          // 按行解析 SSE，跨 chunk 的不完整行先缓冲
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() ?? '';
 
           for (const line of lines) {
             if (!line.startsWith('data: ')) continue;
             const data = line.slice(6);
-            if (data === '[DONE]') continue;
 
             try {
               const parsed = JSON.parse(data) as {
+                type?: 'skill_start' | 'skill_end' | 'content' | 'done' | 'error';
+                skill?: string;
+                label?: string;
+                summary?: string;
                 content?: string;
                 error?: string;
               };
-              if (parsed.error) {
-                accumulated = parsed.error;
-              } else if (parsed.content) {
+
+              if (parsed.type === 'content' && parsed.content) {
                 accumulated += parsed.content;
+              } else if (parsed.type === 'error') {
+                accumulated = parsed.error ?? 'AI 服务暂时不可用，请稍后重试';
+              } else if (parsed.type === 'skill_start') {
+                steps = [
+                  ...steps,
+                  {
+                    skill: parsed.skill ?? '',
+                    label: parsed.label ?? '',
+                    status: 'running',
+                  },
+                ];
+              } else if (parsed.type === 'skill_end') {
+                const idx = steps.findIndex(
+                  (s) => s.status === 'running' && s.skill === parsed.skill,
+                );
+                if (idx >= 0) {
+                  steps = steps.map((s, i) =>
+                    i === idx
+                      ? { ...s, status: 'done', summary: parsed.summary }
+                      : s,
+                  );
+                }
               }
             } catch {
               // skip malformed lines
@@ -224,7 +315,7 @@ export function AiChat() {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsg.id
-                ? { ...m, content: accumulated }
+                ? { ...m, content: accumulated, steps }
                 : m,
             ),
           );
@@ -233,7 +324,7 @@ export function AiChat() {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantMsg.id
-              ? { ...m, content: accumulated, streaming: false }
+              ? { ...m, content: accumulated, steps, streaming: false }
               : m,
           ),
         );
@@ -302,7 +393,7 @@ export function AiChat() {
               </span>
               <div>
                 <p className="text-sm font-semibold text-zinc-900">AI 选品助手</p>
-                <p className="text-[11px] text-zinc-400">基于商品数据库智能分析</p>
+                <p className="text-[11px] text-zinc-400">Agent · 联网趋势 × 商品库分析</p>
               </div>
             </div>
             <div className="flex items-center gap-1">
@@ -336,7 +427,7 @@ export function AiChat() {
                   AI 选品助手
                 </p>
                 <p className="mb-6 max-w-[280px] text-center text-xs leading-relaxed text-zinc-400">
-                  用自然语言描述你的选品需求，我会基于商品数据库帮你分析和推荐
+                  我能联网检索 TikTok 实时趋势，结合商品库做交叉分析，用自然语言描述你的选品需求即可
                 </p>
                 <div className="flex w-full max-w-[320px] flex-col gap-2">
                   {QUICK_PROMPTS.map((prompt) => (
@@ -372,11 +463,26 @@ export function AiChat() {
                   {msg.role === 'user' ? (
                     <p className="text-[13px] leading-relaxed">{msg.content}</p>
                   ) : (
-                    <MessageContent
-                      content={msg.content}
-                      products={products}
-                      streaming={msg.streaming}
-                    />
+                    <>
+                      {msg.steps && msg.steps.length > 0 && (
+                        <SkillSteps steps={msg.steps} />
+                      )}
+                      {msg.content ? (
+                        <MessageContent
+                          content={msg.content}
+                          products={products}
+                          streaming={msg.streaming}
+                        />
+                      ) : (
+                        msg.streaming &&
+                        (!msg.steps || msg.steps.length === 0) && (
+                          <span className="flex items-center gap-1.5 text-[12px] text-zinc-400">
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                            Agent 正在思考...
+                          </span>
+                        )
+                      )}
+                    </>
                   )}
                 </div>
               </div>
