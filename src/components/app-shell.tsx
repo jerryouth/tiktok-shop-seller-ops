@@ -14,6 +14,7 @@ import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
+import { AiChat } from '@/components/ai-chat';
 
 const NAV_ITEMS = [
   { href: '/', label: '市场趋势看板', icon: LayoutDashboard },
@@ -125,6 +126,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           {children}
         </div>
       </main>
+      <AiChat />
       <Toaster position="top-center" richColors />
     </div>
   );
