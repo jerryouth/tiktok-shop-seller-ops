@@ -156,26 +156,34 @@ export async function analyzeImage(
 }
 
 // ---------------------------------------------------------------------------
-// 2. 场景联想：LLM 基于产品构思使用场景（画面暗示价值，而非文字卖点）
+// 2. 场景联想：从产品卖点出发做创意发散，场景传达情绪与理念（而非摆拍）
 // ---------------------------------------------------------------------------
 
-const SCENE_SYSTEM_PROMPT = `你是顶级电商视觉创意总监，擅长用生活方式场景为产品"讲故事"：不依赖任何文字标语，只靠画面元素让目标用户一眼感受到产品带来的价值，产生代入感和购买欲。`;
+const SCENE_SYSTEM_PROMPT = `你是顶级电商视觉创意总监，最擅长从产品卖点出发做场景创意发散：先提炼卖点，再把卖点演绎成有生活温度的真实场景，让画面传达一种情绪与理念，让目标用户产生"这就是我想要的生活"的向往。你从不依赖任何文字标语，只靠画面讲故事。`;
 
 interface RawScene {
   name?: unknown;
-  value?: unknown;
+  sellingPoint?: unknown;
+  emotion?: unknown;
   scene?: unknown;
 }
 
 function sanitizeScene(raw: RawScene, index: number): SceneSuggestion | null {
   const name = typeof raw.name === 'string' ? raw.name.trim() : '';
-  const value = typeof raw.value === 'string' ? raw.value.trim() : '';
+  const sellingPoint = typeof raw.sellingPoint === 'string' ? raw.sellingPoint.trim() : '';
+  const emotion = typeof raw.emotion === 'string' ? raw.emotion.trim() : '';
   const scene = typeof raw.scene === 'string' ? raw.scene.trim() : '';
   if (!name || !scene) return null;
-  return { id: `s${index + 1}`, name, value: value || name, scene };
+  return {
+    id: `s${index + 1}`,
+    name,
+    sellingPoint: sellingPoint || name,
+    emotion: emotion || '向往的生活感',
+    scene,
+  };
 }
 
-/** 基于产品结构，联想 3 个差异化的真实使用场景 */
+/** 基于产品结构与原图卖点，从卖点发散联想 3 个有温度、传达理念的使用场景 */
 export async function suggestScenes(
   structure: ImageStructure,
   headers?: Record<string, string>,
@@ -183,6 +191,11 @@ export async function suggestScenes(
   assertImageStudioReady();
   const client = new LLMClient(new Config(), headers);
   const product = structure.elements.find((e) => e.type === 'product');
+  const sellingTexts = structure.elements
+    .filter((e) => e.type === 'text' || e.type === 'badge')
+    .map((e) => e.description)
+    .filter(Boolean)
+    .join('；');
   const response = await client.invoke(
     [
       { role: 'system', content: SCENE_SYSTEM_PROMPT },
@@ -191,14 +204,18 @@ export async function suggestScenes(
         content: `产品名称：${structure.productName}
 产品特征：${product?.description || '见参考图'}
 原图风格：${structure.style || '电商摄影'}
+原图卖点文案：${sellingTexts || '（原图无文字卖点，请从产品特征自行提炼）'}
 
-请为该产品构思 3 个互不重复的真实使用场景，用于拍摄电商场景主图。每个场景必须：
-1. 具体可拍：环境、光线、氛围、搭配道具都能直接视觉化，避免空泛形容词堆砌
-2. 暗示价值：不写任何文字标语，只靠画面元素让用户感受到产品带来的好处
-3. 差异明显：覆盖不同的时间、空间或人群情绪（例如晨间/夜晚、居家/户外、独处/社交）
+请按两步思考：
+第一步，从产品特征与原图文案中提炼 2-3 个核心卖点（如持妆、便携、安全、省时）；
+第二步，围绕卖点做场景发散，构思 3 个互不重复的真实使用场景。每个场景必须：
+1. 以卖点为原点：场景是该卖点的生活化演绎，让用户"看见"卖点带来的好处，而非生硬摆拍
+2. 有温度：场景里有人情味、情绪或生活态度（清晨的从容、朋友相聚的松弛、独处的治愈），传达一种理念
+3. 具体可拍：环境、光线、道具、氛围、人物状态都能直接视觉化，避免空泛形容词堆砌
+4. 差异明显：覆盖不同的时间、空间或人群情绪（例如晨间/夜晚、居家/户外、独处/社交）
 
 严格 JSON 返回（不要 markdown 代码块）：
-{"scenes":[{"name":"场景短名(2-6字)","value":"画面暗示的价值点(12字内)","scene":"画面描述(50-80字，含环境/光线/道具/氛围)"}]}`,
+{"scenes":[{"name":"场景短名(2-6字)","sellingPoint":"发散源头的卖点(10字内)","emotion":"画面传达的情绪与理念(12字内)","scene":"画面描述(60-90字，含环境/光线/道具/氛围/人物状态)"}]}`,
       },
     ],
     { model: VISION_MODEL, temperature: 0.75 },
@@ -231,51 +248,105 @@ export function posWord(bbox: [number, number, number, number]): string {
   return `画面${v}${h}角区域`;
 }
 
-/** 基于使用场景构建图生图 prompt（每个场景一张，画面无文字） */
+/** 基于使用场景构建图生图 prompt（卖点发散 + 情绪传达 + 画面无文字） */
 export function buildScenePrompts(
   structure: ImageStructure,
   scenes: SceneSuggestion[],
   extra?: string,
-): { prompt: string; variant: string; value: string }[] {
+): { prompt: string; variant: string; note: string; sceneId: string }[] {
   const product = structure.elements.find((e) => e.type === 'product');
   const productDesc = product?.description || structure.productName;
   const pos = product ? posWord(product.bbox) : '画面正中央';
   const extraLine = extra?.trim() ? `\n用户额外要求：${extra.trim()}` : '';
   return scenes.map((s) => ({
     variant: s.name,
-    value: s.value,
+    note: `${s.sellingPoint} · ${s.emotion}`,
+    sceneId: s.id,
     prompt: `高端生活方式电商摄影：${structure.productName}（${productDesc}）。
 严格保持参考图中产品的外观、颜色、材质、形状与细节完全一致，将产品自然融入以下真实使用场景，产品位于${pos}，始终是画面的视觉焦点：
+创意原点（产品卖点）：${s.sellingPoint}
 场景画面：${s.scene}
-画面要无声地传达产品价值：${s.value}，让目标用户一眼产生"这就是我想要的生活"的代入感。
-摄影要求：杂志级生活方式摄影质感，自然真实的光影层次，浅景深背景适度虚化，构图高级有呼吸感，色调和谐统一，正方形构图。${extraLine}
+画面要传达的情绪与理念：${s.emotion}——让目标用户一眼感受到卖点带来的好处，产生"这就是我想要的生活"的代入感与向往。
+摄影要求：杂志级生活方式摄影质感，自然真实的光影层次与色调，画面有生活温度和呼吸感，避免生硬的产品摆拍感，浅景深背景适度虚化，构图高级，正方形构图。${extraLine}
 硬性要求：画面中不要出现任何文字、字母、数字、标签、logo 或水印。`,
   }));
 }
 
 // ---------------------------------------------------------------------------
-// 4. 图生图执行
+// 4. 多角度衍生：对满意场景做不同视角/构图的二次生成
 // ---------------------------------------------------------------------------
 
-/** 以原图为参考，按使用场景批量生成场景化主图（允许部分失败，全部失败才抛错） */
-export async function remixImage(
+/** 多角度构图预设 */
+export const ANGLE_PRESETS = [
+  {
+    key: 'macro',
+    name: '微距特写',
+    desc: '镜头贴近产品做微距特写，产品占据画面主体，浅景深将场景环境虚化成柔美的光斑，集中展示产品的材质、工艺与质感细节',
+  },
+  {
+    key: 'topdown',
+    name: '俯拍陈列',
+    desc: '45° 俯视角度完整呈现场景全貌，产品与道具的陈列关系一目了然，杂志平铺式构图，画面信息丰富而有序',
+  },
+  {
+    key: 'eyelevel',
+    name: '平视瞬间',
+    desc: '平视视角抓拍人物自然使用产品的瞬间（可出现手部或局部侧影，不露正脸），真实生活抓拍感，突出人与产品的互动',
+  },
+  {
+    key: 'wide',
+    name: '远景氛围',
+    desc: '拉远镜头展现场景的大环境与空间氛围，产品融入场景之中作为视觉点睛，强调情绪叙事与整体意境',
+  },
+] as const;
+
+/** 基于选中场景构建多角度图生图 prompt（参考图为该场景已生成的图，保持场景连贯） */
+export function buildAnglePrompts(
+  scene: SceneSuggestion,
+  productName: string,
+  extra?: string,
+): { prompt: string; variant: string; note: string }[] {
+  const extraLine = extra?.trim() ? `\n用户额外要求：${extra.trim()}` : '';
+  return ANGLE_PRESETS.map((a) => ({
+    variant: a.name,
+    note: scene.name,
+    prompt: `生活方式电商摄影的构图变换：参考图中的产品与场景保持不变，仅改变拍摄视角与构图。
+场景：${scene.scene}
+画面要传达的情绪与理念：${scene.emotion}
+新的视角与构图：${a.desc}
+要求：场景环境、道具、光线与色调氛围与参考图保持连贯一致，像是同一场拍摄的不同机位；产品（${productName}）的外观、颜色、材质、形状与细节和参考图完全一致；画面有生活温度，避免生硬摆拍，正方形构图。${extraLine}
+硬性要求：画面中不要出现任何文字、字母、数字、标签、logo 或水印。`,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// 5. 图生图执行
+// ---------------------------------------------------------------------------
+
+interface GenRequest {
+  prompt: string;
+  variant: string;
+  note?: string;
+  sceneId?: string;
+}
+
+/** 批量图生图（允许部分失败，全部失败才抛错） */
+export async function generateImages(
   referenceImageUrl: string,
-  structure: ImageStructure,
-  scenes: SceneSuggestion[],
-  extra: string | undefined,
+  requests: GenRequest[],
   headers: Record<string, string>,
+  size: '2K' | '4K' = '4K',
 ): Promise<RemixResult[]> {
   assertImageStudioReady();
-  if (scenes.length === 0) {
-    throw new Error('请至少保留一个使用场景');
+  if (requests.length === 0) {
+    throw new Error('缺少生成请求');
   }
   const client = new ImageGenerationClient(new Config(), headers);
-  const variants = buildScenePrompts(structure, scenes, extra);
   const responses = await client.batchGenerate(
-    variants.map((v) => ({
-      prompt: v.prompt,
+    requests.map((r) => ({
+      prompt: r.prompt,
       image: referenceImageUrl,
-      size: '4K',
+      size,
       responseFormat: 'url' as const,
       watermark: false,
     })),
@@ -287,8 +358,9 @@ export async function remixImage(
     if (helper.success && helper.imageUrls.length > 0) {
       results.push({
         url: helper.imageUrls[0],
-        variant: variants[i]?.variant ?? `场景 ${i + 1}`,
-        value: variants[i]?.value,
+        variant: requests[i]?.variant ?? `图 ${i + 1}`,
+        note: requests[i]?.note,
+        sceneId: requests[i]?.sceneId,
       });
     } else {
       const msg = resp.error?.message ?? helper.errorMessages.join('; ');
@@ -299,4 +371,31 @@ export async function remixImage(
     throw new Error(`图片生成失败${errors.length > 0 ? `：${errors[0]}` : '，请稍后重试'}`);
   }
   return results;
+}
+
+/** 以原图为参考，按使用场景批量生成场景化主图 */
+export async function remixImage(
+  referenceImageUrl: string,
+  structure: ImageStructure,
+  scenes: SceneSuggestion[],
+  extra: string | undefined,
+  headers: Record<string, string>,
+): Promise<RemixResult[]> {
+  if (scenes.length === 0) {
+    throw new Error('请至少保留一个使用场景');
+  }
+  const prompts = buildScenePrompts(structure, scenes, extra);
+  return generateImages(referenceImageUrl, prompts, headers);
+}
+
+/** 以选中场景已生成的图为参考，衍生多角度/不同构图的同场景图 */
+export async function remixAngles(
+  selectedImageUrl: string,
+  scene: SceneSuggestion,
+  productName: string,
+  extra: string | undefined,
+  headers: Record<string, string>,
+): Promise<RemixResult[]> {
+  const prompts = buildAnglePrompts(scene, productName, extra);
+  return generateImages(selectedImageUrl, prompts, headers);
 }

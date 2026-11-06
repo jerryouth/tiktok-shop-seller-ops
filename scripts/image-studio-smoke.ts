@@ -2,7 +2,13 @@
 // 用法：pnpm tsx scripts/image-studio-smoke.ts
 import { promises as fs } from 'fs';
 import path from 'path';
-import { buildScenePrompts, remixImage, suggestScenes } from '../src/lib/image-studio';
+import {
+  buildAnglePrompts,
+  buildScenePrompts,
+  generateImages,
+  remixImage,
+  suggestScenes,
+} from '../src/lib/image-studio';
 import type { ImageStructure, RemixResult } from '../src/lib/image-types';
 
 const PORT = process.env.DEPLOY_RUN_PORT ?? '5000';
@@ -51,21 +57,33 @@ async function main(): Promise<void> {
     if (el.bbox[2] <= 0 || el.bbox[3] <= 0) throw new Error(`退化 bbox 未被过滤: ${el.name}`);
   }
 
-  // 4. AI 场景联想（直接调核心库，HTTP 层逻辑与 analyze 一致）
-  console.log('\n========== 4. AI 场景联想 ==========');
+  // 4. AI 场景联想：卖点发散 + 情绪理念（直接调核心库，HTTP 层逻辑与 analyze 一致）
+  console.log('\n========== 4. AI 场景联想（卖点发散）==========');
   const scenes = await suggestScenes(structure, {});
   for (const s of scenes) {
-    console.log(`  「${s.name}」暗示价值：${s.value}`);
+    console.log(`  「${s.name}」卖点：${s.sellingPoint} ｜ 情绪：${s.emotion}`);
     console.log(`    画面：${s.scene}`);
   }
   if (scenes.length === 0) throw new Error('场景联想为空');
+  if (scenes.some((s) => !s.sellingPoint || !s.emotion)) throw new Error('场景缺少卖点/情绪字段');
 
   // 5. 场景化 prompt + 图生图（参考图 = 上传图的公网 URL，复刻用户真实链路）
   console.log('\n========== 5. 场景图生图（4K 无文字，上传图回源）==========');
   const prompts = buildScenePrompts(structure, scenes);
   for (const p of prompts) console.log(`  [${p.variant}] ${p.prompt.split('\n')[0]}`);
   const results: RemixResult[] = await remixImage(publicUrl, structure, scenes, undefined, {});
-  for (const r of results) console.log(`  [${r.variant}] ${r.url.slice(0, 90)}...`);
+  for (const r of results) console.log(`  [${r.variant}] sceneId=${r.sceneId ?? '—'} ${r.url.slice(0, 80)}...`);
+  if (results.some((r) => !r.sceneId)) throw new Error('生成结果缺少 sceneId 回传');
+
+  // 6. 多角度衍生：以第一张场景图为参考，生成不同机位（冒烟只跑 2 个视角控时）
+  console.log('\n========== 6. 多角度衍生（微距特写 + 俯拍陈列）==========');
+  const first = results[0];
+  const firstScene = scenes.find((s) => s.id === first.sceneId);
+  if (!first || !firstScene) throw new Error('场景结果与场景数据无法关联');
+  const anglePrompts = buildAnglePrompts(firstScene, structure.productName);
+  console.log(`  预设视角：${anglePrompts.map((a) => a.variant).join(' / ')}`);
+  const angleResults = await generateImages(first.url, anglePrompts.slice(0, 2), {});
+  for (const r of angleResults) console.log(`  [${r.variant}] ${r.url.slice(0, 80)}...`);
 
   console.log('\n全部通过');
 }

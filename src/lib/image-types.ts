@@ -25,14 +25,16 @@ export interface ImageStructure {
   elements: ImageElement[];
 }
 
-/** AI 联想的使用场景（暗示产品价值，驱动场景化图生图） */
+/** AI 联想的使用场景（从卖点发散，传达温度与理念，驱动场景化图生图） */
 export interface SceneSuggestion {
   id: string;
   /** 场景短名，如「晨间通勤」 */
   name: string;
-  /** 画面暗示的产品价值点 */
-  value: string;
-  /** 具体画面描述：环境/光线/道具/氛围 */
+  /** 发散源头的产品卖点，如「12小时持妆」 */
+  sellingPoint: string;
+  /** 画面传达的情绪与理念，如「通勤路上的从容自信」 */
+  emotion: string;
+  /** 具体画面描述：环境/光线/道具/氛围/人物状态 */
   scene: string;
 }
 
@@ -40,8 +42,10 @@ export interface SceneSuggestion {
 export interface RemixResult {
   url: string;
   variant: string;
-  /** 该图暗示的价值点（场景模式下有值） */
-  value?: string;
+  /** 结果副标题（场景模式为「卖点 · 情绪」，多角度模式为来源场景名） */
+  note?: string;
+  /** 来源场景 id（场景模式下有值，用于多角度衍生时找回场景） */
+  sceneId?: string;
 }
 
 /** 元素类型元数据（标签 + 标记色，与 DESIGN.md 图表色板一致） */

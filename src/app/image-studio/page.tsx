@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Image from 'next/image';
 import { toast } from 'sonner';
 import {
+  Aperture,
   ArrowDown,
   ArrowUp,
   Check,
@@ -38,6 +39,13 @@ interface SelectedImage {
   /** 发给后端的引用（/products/xxx.png 或 /api/image/file/{id}） */
   serverRef: string;
   name: string;
+}
+
+/** 一批多角度衍生结果（基于某张场景图二次生成） */
+interface AngleBatch {
+  id: string;
+  sceneName: string;
+  results: RemixResult[];
 }
 
 const STEP_DEFS = [
@@ -77,6 +85,10 @@ export default function ImageStudioPage() {
   const [generating, setGenerating] = useState(false);
   const [results, setResults] = useState<RemixResult[]>([]);
 
+  // ------- 多角度衍生 -------
+  const [angleBatches, setAngleBatches] = useState<AngleBatch[]>([]);
+  const [anglesFor, setAnglesFor] = useState<string | null>(null);
+
   // ------- 画布拖拽 -------
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{
@@ -108,6 +120,7 @@ export default function ImageStudioPage() {
     setStructure(null);
     setScenes([]);
     setResults([]);
+    setAngleBatches([]);
     setActiveId(null);
   }, []);
 
@@ -126,6 +139,7 @@ export default function ImageStudioPage() {
       setStructure(null);
       setScenes([]);
       setResults([]);
+      setAngleBatches([]);
       setActiveId(null);
       toast.success('图片已上传，可以开始解析');
     } catch (err) {
@@ -173,6 +187,7 @@ export default function ImageStudioPage() {
       setStructure(s);
       setScenes([]);
       setResults([]);
+      setAngleBatches([]);
       setActiveId(s.elements.find((e) => e.type === 'product')?.id ?? s.elements[0]?.id ?? null);
       toast.success(`识别完成：拆解出 ${s.elements.length} 个结构元素`);
       void loadScenes(s);
@@ -223,7 +238,7 @@ export default function ImageStudioPage() {
   const addScene = useCallback(() => {
     setScenes((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), name: '自定义场景', value: '', scene: '' },
+      { id: crypto.randomUUID(), name: '自定义场景', sellingPoint: '', emotion: '', scene: '' },
     ]);
   }, []);
 
@@ -328,6 +343,43 @@ export default function ImageStudioPage() {
     }
   }, []);
 
+  /** 对满意的场景图做二次生成：同场景、不同机位/构图 */
+  const generateAngles = useCallback(
+    async (r: RemixResult) => {
+      const scene = scenes.find((s) => s.id === r.sceneId);
+      if (!scene) {
+        toast.error('该图的来源场景已被删除，无法做多角度衍生');
+        return;
+      }
+      if (!structure || anglesFor) return;
+      setAnglesFor(r.url);
+      try {
+        const res = await fetch('/api/image/angles', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image: r.url,
+            scene,
+            productName: structure.productName,
+            extra,
+          }),
+        });
+        const json = (await res.json()) as { images?: RemixResult[]; error?: string };
+        if (!res.ok || !json.images) throw new Error(json.error ?? '多角度生成失败');
+        setAngleBatches((prev) => [
+          { id: crypto.randomUUID(), sceneName: scene.name, results: json.images ?? [] },
+          ...prev,
+        ]);
+        toast.success(`已生成「${scene.name}」的 ${json.images.length} 个视角`);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : '多角度生成失败');
+      } finally {
+        setAnglesFor(null);
+      }
+    },
+    [scenes, structure, extra, anglesFor],
+  );
+
   const stepsDone = [Boolean(selected), Boolean(structure), results.length > 0];
 
   return (
@@ -337,7 +389,7 @@ export default function ImageStudioPage() {
         <div>
           <h1 className="text-xl font-semibold text-zinc-900">主图工作台</h1>
           <p className="mt-1 text-[13px] text-zinc-500">
-            AI 拆解主图视觉结构，拖拽重排布局，一键生成新的 Listing 主图
+            AI 拆解主图结构，从卖点发散场景创意，对满意的场景可二次生成多角度构图
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -644,7 +696,7 @@ export default function ImageStudioPage() {
                 场景联想
               </h2>
               <p className="mt-0.5 text-[11px] text-zinc-400">
-                每个场景暗示一个产品价值点，生成图不含任何文字——靠画面本身打动买家
+                从产品卖点发散场景创意，画面传达情绪与理念、不含任何文字——靠场景的温度打动买家
               </p>
             </div>
             <div className="flex gap-2">
@@ -699,16 +751,24 @@ export default function ImageStudioPage() {
                       <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  <Input
-                    value={s.value}
-                    onChange={(e) => patchScene(s.id, { value: e.target.value })}
-                    placeholder="暗示的价值点，如：随时随地保持精致"
-                    className="mt-1 h-7 border-0 bg-amber-50 px-2 text-[11px] text-amber-700 shadow-none placeholder:text-amber-400 focus-visible:ring-1"
-                  />
+                  <div className="mt-1 flex gap-1.5">
+                    <Input
+                      value={s.sellingPoint}
+                      onChange={(e) => patchScene(s.id, { sellingPoint: e.target.value })}
+                      placeholder="卖点，如：12小时持妆"
+                      className="h-7 flex-1 border-0 bg-[#fe2c55]/10 px-2 text-[11px] text-[#fe2c55] shadow-none placeholder:text-[#fe2c55]/50 focus-visible:ring-1"
+                    />
+                    <Input
+                      value={s.emotion}
+                      onChange={(e) => patchScene(s.id, { emotion: e.target.value })}
+                      placeholder="情绪/理念，如：从容自信"
+                      className="h-7 flex-1 border-0 bg-amber-50 px-2 text-[11px] text-amber-700 shadow-none placeholder:text-amber-400 focus-visible:ring-1"
+                    />
+                  </div>
                   <textarea
                     value={s.scene}
                     onChange={(e) => patchScene(s.id, { scene: e.target.value })}
-                    placeholder="画面描述：环境 / 光线 / 道具 / 氛围"
+                    placeholder="画面描述：环境 / 光线 / 道具 / 氛围 / 人物状态"
                     rows={4}
                     className="mt-2 w-full resize-none rounded-md border border-zinc-200 bg-white px-2 py-1.5 text-xs leading-relaxed text-zinc-700 outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-1 focus:ring-zinc-200"
                   />
@@ -768,26 +828,112 @@ export default function ImageStudioPage() {
                   <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/60 to-transparent px-3 pt-8 pb-2">
                     <div className="min-w-0">
                       <span className="text-xs font-medium text-white">{r.variant}</span>
-                      {r.value && (
-                        <p className="truncate text-[10px] text-white/75">{r.value}</p>
+                      {r.note && (
+                        <p className="truncate text-[10px] text-white/75">{r.note}</p>
                       )}
                     </div>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      className="h-7 bg-white/90 text-xs hover:bg-white"
-                      onClick={() => void downloadImage(r.url, r.variant, i)}
-                    >
-                      <Download className="h-3 w-3" />
-                      下载
-                    </Button>
+                    <div className="flex shrink-0 gap-1.5">
+                      {r.sceneId && (
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-7 bg-white/90 text-xs hover:bg-white"
+                          disabled={anglesFor !== null}
+                          title="以此场景生成不同机位/构图的图"
+                          onClick={() => void generateAngles(r)}
+                        >
+                          {anglesFor === r.url ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Aperture className="h-3 w-3" />
+                          )}
+                          多角度
+                        </Button>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        className="h-7 bg-white/90 text-xs hover:bg-white"
+                        onClick={() => void downloadImage(r.url, r.variant, i)}
+                      >
+                        <Download className="h-3 w-3" />
+                        下载
+                      </Button>
+                    </div>
                   </div>
                 </div>
               ))}
           </div>
           <p className="mt-2 text-[11px] text-zinc-400">
-            生成图为 4K 分辨率生活方式场景图，可直接用于 TikTok Shop Listing 与详情页；不满意可编辑场景描述后重新生成
+            生成图为 4K 生活方式场景图，可直接用于 Listing；点击「多角度」可对满意的场景二次生成 4 个不同机位的同场景图
           </p>
+        </section>
+      )}
+
+      {/* 多角度衍生结果 */}
+      {(angleBatches.length > 0 || anglesFor) && (
+        <section className="rounded-xl border border-zinc-200 bg-white p-4">
+          <div className="mb-3">
+            <h2 className="flex items-center gap-1.5 text-[15px] font-semibold text-zinc-900">
+              <Aperture className="h-4 w-4 text-[#6366f1]" />
+              多角度衍生
+            </h2>
+            <p className="mt-0.5 text-[11px] text-zinc-400">
+              以选中场景图为参考做同场景不同机位的二次生成，保持场景与产品连贯一致
+            </p>
+          </div>
+
+          {anglesFor && (
+            <div className="mb-3 grid gap-3 sm:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <div
+                  key={i}
+                  className="flex aspect-square flex-col items-center justify-center gap-2 rounded-lg bg-zinc-50 text-zinc-400"
+                >
+                  <Loader2 className="h-5 w-5 animate-spin text-[#6366f1]" />
+                  <p className="text-xs">正在生成 4 个视角…</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-4">
+            {angleBatches.map((batch) => (
+              <div key={batch.id}>
+                <h3 className="mb-2 text-[13px] font-medium text-zinc-700">
+                  「{batch.sceneName}」的 {batch.results.length} 个视角
+                </h3>
+                <div className="grid gap-3 sm:grid-cols-4">
+                  {batch.results.map((r, i) => (
+                    <div
+                      key={r.url}
+                      className="group relative overflow-hidden rounded-lg border border-zinc-200"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={r.url}
+                        alt={r.variant}
+                        className="block aspect-square w-full object-cover"
+                      />
+                      <div className="absolute inset-x-0 bottom-0 flex items-center justify-between bg-gradient-to-t from-black/60 to-transparent px-2.5 pt-6 pb-1.5">
+                        <span className="text-[11px] font-medium text-white">{r.variant}</span>
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="h-6 bg-white/90 px-2 text-[11px] hover:bg-white"
+                          onClick={() =>
+                            void downloadImage(r.url, `${batch.sceneName}-${r.variant}`, i)
+                          }
+                        >
+                          <Download className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         </section>
       )}
     </div>
