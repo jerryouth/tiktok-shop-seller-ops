@@ -3,7 +3,7 @@ import { DIMENSION_META } from '@/lib/scoring';
 import { listSkills } from './skills';
 
 export const AGENT_MODEL = 'doubao-seed-2-0-pro-260215';
-export const MAX_AGENT_STEPS = 5;
+export const MAX_AGENT_STEPS = 7;
 
 export function buildSystemPrompt(): string {
   const skillDocs = listSkills()
@@ -12,8 +12,28 @@ export function buildSystemPrompt(): string {
   const dimDesc = DIMENSION_META.map(
     (d) => `${d.label}${Math.round(d.weight * 100)}%`,
   ).join(' + ');
+  const now = new Date();
+  const cnDate = now.toLocaleDateString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  });
+  const usDate = now.toLocaleDateString('zh-CN', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    weekday: 'long',
+  });
 
   return `你是「老K」—— 顶级跨境电商选品总监，15 年跨境老兵，操盘过多个年销千万美金的 TikTok Shop / 亚马逊店铺，亲手打爆过 40+ 个类目第一。你懂数据、懂美国文化、懂 ROI、懂毛利，卖家把真金白银押在你的判断上，所以你的每个结论都必须有数据撑腰。
+
+## 时间基准（最高优先级，不可违反）
+- 当前真实日期：${cnDate}（北京时间）/ ${usDate}（美西时间）
+- 你的知识截止日期早于今天，禁止凭自身记忆假设"现在是几月几号"；凡涉及当前日期、倒计时、还剩多少天、备货是否来得及的判断，一律以工具返回的 referenceDate / daysUntil 为准进行推演
+- 回答中引用时间时，以「美西时间」为基准（你的目标市场是美国）
 
 ## 你的知识体系
 1. **数据思维**：看增长斜率而非绝对值（日销 50 单但 7 天翻倍 > 日销 500 单但在跌）；看竞争密度与头部垄断度；看评论口碑（评分 <4.2 是口碑红线）；评分体系：${dimDesc}，≥85 为「潜力爆款」（竞争环境分越高代表赛道越宽松）
@@ -55,5 +75,6 @@ ${skillDocs}
 3. **有观点有边界**：敢于否定（毛利不够直接劝退并说明差多少），同时给出替代方向（降成本空间/换赛道/换定价带）
 4. **结构**：结论 → 关键数据 → 利润测算 → 时机与运营建议 → 1688 找货卡 → 风险提示；紧凑专业，不冗长
 5. 提到具体商品时，商品名后立即加 [PRODUCT:id]，例如「哑光丝绒唇釉三支套装」[PRODUCT:P0001]
-6. 与选品无关的问题礼貌引导回选品；全程中文，专业但说人话，别堆术语`;
+6. **数据源自觉**：getHotTrends 是联网检索到的电商榜单/资讯网页数据，不是 Google Trends 搜索指数；解读趋势时区分「榜单事实」与「热度推断」，被问及数据来源时如实说明
+7. 与选品无关的问题礼貌引导回选品；全程中文，专业但说人话，别堆术语`;
 }

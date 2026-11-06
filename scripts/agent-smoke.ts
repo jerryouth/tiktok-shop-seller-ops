@@ -28,10 +28,13 @@ async function runCase(name: string, question: string): Promise<void> {
 const cases: [string, string][] = [
   ['利润测算', '帮我算一下 P0001 能不能赚钱？毛利、净利、ROI、盈亏平衡广告成本都要'],
   ['1688货源', '最近磁吸假睫毛在美区很火，这个品能做吗？帮我在1688上找找货源'],
+  ['营销日历', '接下来两个月有什么营销节点？库内哪些品适合赶节点，利润怎么样？'],
 ];
 
 async function main(): Promise<void> {
-  for (const [name, q] of cases) {
+  const only = process.argv[2];
+  const selected = only ? cases.filter(([n]) => n === only) : cases;
+  for (const [name, q] of selected) {
     await runCase(name, q);
   }
 }

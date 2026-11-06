@@ -172,6 +172,17 @@ export async function runAgent({
     }
   }
 
-  // 超出最大轮次仍在调用工具：提示前端已收敛
-  emit({ type: 'content', content: '（已达到最大分析轮次，以上基于已获取信息）' });
+  // 超出最大轮次仍在调用工具：强制收敛——明确要求基于已获取信息立即产出最终回答
+  messages.push({
+    role: 'user',
+    content:
+      '已达到最大工具调用轮次。请基于以上已获取的全部信息，立即输出最终回答（禁止再调用任何工具，禁止输出 tool_call 标签）。',
+  });
+  const finalText = await streamTurn(client, messages, emit);
+  if (parseToolCall(finalText).kind !== 'none') {
+    emit({
+      type: 'content',
+      content: '（已达到最大分析轮次，以上基于已获取信息）',
+    });
+  }
 }
