@@ -27,6 +27,17 @@ export async function POST(request: NextRequest) {
           );
         };
         try {
+          // 本地开发环境无云端 AI 凭证时优雅降级，不影响选品库/看板等本地功能
+          if (!process.env.COZE_INTEGRATION_BASE_URL) {
+            emit({
+              type: 'error',
+              error:
+                '当前为本地开发环境，未注入云端 AI 凭证，AI 对话与联网趋势功能仅在云端部署环境可用。选品库与趋势看板不受影响。',
+            });
+            emit({ type: 'done' });
+            controller.close();
+            return;
+          }
           await runAgent({ headers: request.headers, history, emit });
           emit({ type: 'done' });
         } catch (error) {
