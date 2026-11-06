@@ -1,32 +1,39 @@
-// 主图工作台端到端冒烟：HTTP 上传/读取 → HTTP 结构解析 → 布局重排 prompt → 图生图
+// 主图工作台端到端冒烟：复刻用户真实链路——HTTP 上传真实图片 → 公网可达性校验 → HTTP 结构解析 → 以上传图公网 URL 做图生图
 // 用法：pnpm tsx scripts/image-studio-smoke.ts
+import { promises as fs } from 'fs';
+import path from 'path';
 import { buildRemixPrompts, remixImage } from '../src/lib/image-studio';
 import type { ImageStructure, RemixResult } from '../src/lib/image-types';
 
 const PORT = process.env.DEPLOY_RUN_PORT ?? '5000';
 const BASE = `http://localhost:${PORT}`;
-
-// 1x1 红色 PNG
-const TINY_PNG =
-  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+const domain = process.env.COZE_PROJECT_DOMAIN_DEFAULT ?? '';
+const ORIGIN = domain.startsWith('http') ? domain : `https://${domain}`;
 
 async function main(): Promise<void> {
-  // 1. 上传 + 公网读取
-  console.log('========== 1. POST /api/image/file + GET 读取 ==========');
+  const buf = await fs.readFile(path.join(process.cwd(), 'public/products/beauty-1.png'));
+  const dataUrl = `data:image/png;base64,${buf.toString('base64')}`;
+
+  // 1. HTTP 上传真实商品图
+  console.log('========== 1. POST /api/image/file（真实商品图）==========');
   const upRes = await fetch(`${BASE}/api/image/file`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ dataUrl: TINY_PNG }),
+    body: JSON.stringify({ dataUrl }),
   });
   const upJson = (await upRes.json()) as { id?: string; url?: string; error?: string };
   if (!upRes.ok || !upJson.url) throw new Error(`上传失败: ${upJson.error ?? upRes.status}`);
-  console.log(`上传成功: id=${upJson.id} url=${upJson.url}`);
-  const getRes = await fetch(`${BASE}${upJson.url}`);
-  if (!getRes.ok) throw new Error(`读取失败: ${getRes.status}`);
-  console.log(`读取成功: ${getRes.status} ${getRes.headers.get('content-type')}`);
+  console.log(`上传成功: ${upJson.url}`);
 
-  // 2. HTTP 结构解析（走 resolveToDataUri 的 fs 读取路径）
-  console.log('\n========== 2. POST /api/image/analyze ==========');
+  // 2. 公网可达性校验（图生图服务回源视角）
+  console.log('\n========== 2. 公网可达性校验 ==========');
+  const publicUrl = `${ORIGIN}${upJson.url}`;
+  const pubRes = await fetch(publicUrl);
+  if (!pubRes.ok) throw new Error(`公网读取失败: ${pubRes.status} ${publicUrl}`);
+  console.log(`公网可达: ${pubRes.status} ${pubRes.headers.get('content-type')} ${publicUrl.slice(0, 80)}...`);
+
+  // 3. HTTP 结构解析（/products 路径走 fs 读取）
+  console.log('\n========== 3. POST /api/image/analyze ==========');
   const anRes = await fetch(`${BASE}/api/image/analyze`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -40,20 +47,16 @@ async function main(): Promise<void> {
     const b = el.bbox.map((v) => v.toFixed(2)).join(', ');
     console.log(`  [${el.type}] ${el.name} | bbox=[${b}]`);
   }
+  for (const el of structure.elements) {
+    if (el.bbox[2] <= 0 || el.bbox[3] <= 0) throw new Error(`退化 bbox 未被过滤: ${el.name}`);
+  }
 
-  // 3. 重排 prompt 构建（lib 层）
-  console.log('\n========== 3. 重排 prompt 构建 ==========');
+  // 4. 重排 prompt + 图生图（参考图 = 上传图的公网 URL，复刻用户失败场景）
+  console.log('\n========== 4. 图生图（上传图回源）==========');
   const shuffled = { ...structure, elements: [...structure.elements].reverse() };
   const prompts = buildRemixPrompts(shuffled);
-  console.log(`变体数：${prompts.length}（${prompts.map((p) => p.variant).join(' / ')}）`);
-
-  // 4. 图生图（lib 层，参考图用公网 URL）
-  console.log('\n========== 4. 图生图 ==========');
-  const domain = process.env.COZE_PROJECT_DOMAIN_DEFAULT ?? '';
-  const origin = domain.startsWith('http') ? domain : `https://${domain}`;
-  const referenceUrl = `${origin}/products/beauty-1.png`;
-  console.log(`参考图：${referenceUrl}`);
-  const results: RemixResult[] = await remixImage(referenceUrl, shuffled, undefined, {});
+  console.log(`变体数：${prompts.length}，参考图：${publicUrl.slice(0, 80)}...`);
+  const results: RemixResult[] = await remixImage(publicUrl, shuffled, undefined, {});
   for (const r of results) console.log(`  [${r.variant}] ${r.url.slice(0, 90)}...`);
 
   console.log('\n全部通过');

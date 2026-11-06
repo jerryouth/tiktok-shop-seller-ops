@@ -42,11 +42,12 @@ export function resolveToPublicUrl(image: string, origin: string): string {
   throw new Error('图生图需要商品库图片或已上传图片（不支持直接使用本地预览数据）');
 }
 
-/** 从请求头推导对外访问源（协议 + 域名） */
+/** 从请求推导对外访问源：优先平台注入的对外域名（host 头可能是内网地址或带端口后缀的预览域名，外部生成服务未必可达），host 头仅作本地兜底 */
 export function resolveOrigin(request: Request): string {
-  const proto = request.headers.get('x-forwarded-proto') ?? 'https';
-  const host = request.headers.get('host');
-  if (host) return `${proto}://${host}`;
   const domain = process.env.COZE_PROJECT_DOMAIN_DEFAULT ?? '';
-  return domain.startsWith('http') ? domain : `https://${domain}`;
+  if (domain) return domain.startsWith('http') ? domain : `https://${domain}`;
+  const proto = request.headers.get('x-forwarded-proto') ?? 'https';
+  const host = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
+  if (host) return `${proto}://${host}`;
+  return '';
 }

@@ -18,7 +18,7 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 2. **智能选品评分**（`src/lib/scoring.ts`）：热度 25% + 利润 25% + 销量 20% + 竞争环境 15% + 增长势头 15%，0-100 分；≥85 标注「潜力爆款」；自动生成中文推荐理由（评级开场 → 核心优势 → 风险提示 → 运营建议）。
 3. **市场趋势看板**（`/`）：4 张统计卡片、热销品类条形图、近 14 天销量折线、飙升商品榜（近 7 天增幅 TOP6）、评分分布环形饼图。
 4. **AI 选品 Agent**（`src/lib/agent/` + `/api/chat`）：自然语言对话选品，ReAct 多跳推理（协议式工具调用，非原生 function calling）。模型输出 `<tool_call>{"skill":"...","args":{...}}</tool_call>` → runner 解析执行 Skill → `<tool_result>` 注入观察 → 循环至产出最终回答（最多 5 轮）。6 个 Skill 薄封装 store/趋势源：queryProducts、getProductDetail、getCategoryInsights、getMarketOverview、compareProducts、getHotTrends（联网趋势）。模型：doubao-seed-2-0-pro-260215。SSE 事件协议：skill_start / skill_end / content / done / error。前端 `ai-chat.tsx` 悬浮面板（右下角）：流式打字机渲染、[PRODUCT:id] 内联商品卡片、Agent 执行步骤可视化、跨 chunk SSE 行缓冲。
-5. **主图工作台**（`/image-studio` + `src/lib/image-studio.ts` + `/api/image/*`）：AI 拆解主图视觉结构（多模态 LLM 输出元素归一化 bbox），画布拖拽标记框重排布局（也可一键打乱/增删/改文案），再以原图为参考批量图生图产出 3 个风格变体（2K、无水印），用于 Listing 制作。元素六类型：product/background/prop/text/badge/decor。解析模型 doubao-seed-2-0-pro-260215（视觉，temperature 0.2），生成模型 doubao-seedream-5-0。上传图片经内存仓库 `image-store.ts` 换公网 URL 供图生图回源；商品库图直接拼请求 origin。bbox 清洗规则：先夹取 [0,1] 再丢弃零面积框（模型偶发越界坐标）。
+5. **主图工作台**（`/image-studio` + `src/lib/image-studio.ts` + `/api/image/*`）：AI 拆解主图视觉结构（多模态 LLM 输出元素归一化 bbox），画布拖拽标记框重排布局（也可一键打乱/增删/改文案），再以原图为参考批量图生图产出 3 个风格变体（2K、无水印），用于 Listing 制作。元素六类型：product/background/prop/text/badge/decor。解析模型 doubao-seed-2-0-pro-260215（视觉，temperature 0.2），生成模型 doubao-seedream-5-0。上传图片经内存仓库 `image-store.ts` 换公网 URL 供图生图回源；参考图 origin 优先取 `COZE_PROJECT_DOMAIN_DEFAULT`（host 头可能是内网地址或带端口后缀的预览域名，生成服务外部回源会失败），host 仅作本地兜底。bbox 清洗规则：先夹取 [0,1] 再丢弃零面积框（模型偶发越界坐标）。
 
 ## 目录结构
 
