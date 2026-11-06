@@ -1,65 +1,69 @@
 # 项目上下文
 
-### 版本技术栈
+TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境卖家辅助选品决策。
+
+## 版本技术栈
 
 - **Framework**: Next.js 16 (App Router)
 - **Core**: React 19
 - **Language**: TypeScript 5
 - **UI 组件**: shadcn/ui (基于 Radix UI)
 - **Styling**: Tailwind CSS 4
+- **图表**: ECharts 6（封装于 `src/components/echart.tsx`）
+- **包管理**: 仅 pnpm，严禁 npm / yarn
+
+## 业务模块
+
+1. **选品库**（`/products`）：表格（图片/名称/类目/售价/销量/评分/7日增幅/上架时间/选品评分）、关键词防抖搜索、类目/价格/销量/评分/分数组合筛选、6 字段排序、分页、批量删除、新增商品对话框、CSV 批量导入、商品详情抽屉（雷达图 + 近 14 天销量 + 推荐理由）。
+2. **智能选品评分**（`src/lib/scoring.ts`）：热度 25% + 利润 25% + 销量 20% + 竞争环境 15% + 增长势头 15%，0-100 分；≥85 标注「潜力爆款」；自动生成中文推荐理由（评级开场 → 核心优势 → 风险提示 → 运营建议）。
+3. **市场趋势看板**（`/`）：4 张统计卡片、热销品类条形图、近 14 天销量折线、飙升商品榜（近 7 天增幅 TOP6）、评分分布环形饼图。
 
 ## 目录结构
 
 ```
-├── public/                 # 静态资源
-├── scripts/                # 构建与启动脚本
-│   ├── build.sh            # 构建脚本
-│   ├── dev.sh              # 开发环境启动脚本
-│   ├── prepare.sh          # 预处理脚本
-│   └── start.sh            # 生产环境启动脚本
+├── public/products/        # AI 生成的商品演示图（6 类目 × 2）
 ├── src/
-│   ├── app/                # 页面路由与布局
-│   ├── components/ui/      # Shadcn UI 组件库
-│   ├── hooks/              # 自定义 Hooks
-│   ├── lib/                # 工具库
-│   │   └── utils.ts        # 通用工具函数 (cn)
-│   └── server.ts           # 自定义服务端入口
-├── next.config.ts          # Next.js 配置
-├── package.json            # 项目依赖管理
-└── tsconfig.json           # TypeScript 配置
+│   ├── app/
+│   │   ├── page.tsx              # 市场趋势看板（客户端组件）
+│   │   ├── products/page.tsx     # 选品库页面
+│   │   ├── layout.tsx            # 根布局（挂载 AppShell）
+│   │   └── api/
+│   │       ├── products/route.ts         # GET 列表 / POST 新增 / DELETE 批量
+│   │       ├── products/[id]/route.ts    # GET 详情 / DELETE 单个
+│   │       ├── products/import/route.ts  # POST CSV 导入
+│   │       └── stats/route.ts            # GET 看板统计
+│   ├── components/
+│   │   ├── app-shell.tsx         # 深色侧边栏布局（移动端 Sheet 抽屉）
+│   │   ├── echart.tsx            # ECharts 通用封装（自动 resize）
+│   │   ├── score-badge.tsx       # 评分徽章 + 潜力爆款标识
+│   │   ├── product-form-dialog.tsx / import-dialog.tsx / product-detail-drawer.tsx
+│   │   └── ui/                   # shadcn/ui 组件库
+│   └── lib/
+│       ├── types.ts              # 全局类型（Product / ScoreResult / DashboardStats…）
+│       ├── scoring.ts            # 评分引擎（维度加权 + 推荐理由生成）
+│       ├── data.ts               # 28 个内置演示商品（确定性日销序列）
+│       ├── store.ts              # 内存数据仓库（globalThis 挂载，HMR 安全）
+│       ├── format.ts             # 格式化工具（销量/金额/百分比/评分档位）
+│       └── utils.ts              # cn()
+├── DESIGN.md                 # 设计规范（TikTok 青/洋红双色点缀的浅色后台）
+└── next.config.ts
 ```
 
-- 项目文件（如 app 目录、pages 目录、components 等）默认初始化到 `src/` 目录下。
+## 数据源与迭代
 
-## 包管理规范
-
-**仅允许使用 pnpm** 作为包管理器，**严禁使用 npm 或 yarn**。
-**常用命令**：
-- 安装依赖：`pnpm add <package>`
-- 安装开发依赖：`pnpm add -D <package>`
-- 安装所有依赖：`pnpm install`
-- 移除依赖：`pnpm remove <package>`
+- 当前为**内存演示数据**（`store.ts` 中 `getProducts()`，服务重启后重置为 28 个演示商品）。
+- 对接真实数据时：仅需替换 `store.ts` 的数据读写实现（保持函数签名不变），评分引擎、API 路由与前端无需改动。
 
 ## 开发规范
 
-### 编码规范
+- 默认按 TypeScript `strict` 写代码；禁止隐式 `any` 与 `as any`。
+- ECharts option 中的 formatter 回调参数统一用 `unknown` 再断言，避免与 `EChartsOption` 类型冲突。
+- 严禁在 JSX 渲染逻辑中直接使用 `typeof window`、`Date.now()`、`Math.random()`；动态内容用 `'use client'` + `useEffect`。
+- 三方字体/CSS 在 `globals.css` 顶部 `@import`（中文字体用 `fonts.googleapis.cn`），禁止 head 标签。
+- 金额用 `$` 前缀（美元），销量用「万」格式化，百分比带 `+/-` 号。
+- 评分分档：≥85 洋红 #FE2C55「潜力爆款」；70-84 青 #00B8B0；55-69 琥珀；<55 灰。
 
-- 默认按 TypeScript `strict` 心智写代码；优先复用当前作用域已声明的变量、函数、类型和导入，禁止引用未声明标识符或拼错变量名。
-- 禁止隐式 `any` 和 `as any`；函数参数、返回值、解构项、事件对象、`catch` 错误在使用前应有明确类型或先完成类型收窄，并清理未使用的变量和导入。
+## 验证命令
 
-### next.config 配置规范
-
-- 配置的路径不要写死绝对路径，必须使用 path.resolve(__dirname, ...)、import.meta.dirname 或 process.cwd() 动态拼接。
-
-### Hydration 问题防范
-
-1. 严禁在 JSX 渲染逻辑中直接使用 typeof window、Date.now()、Math.random() 等动态数据。**必须使用 'use client' 并配合 useEffect + useState 确保动态内容仅在客户端挂载后渲染**；同时严禁非法 HTML 嵌套（如 <p> 嵌套 <div>）。
-2. **禁止使用 head 标签**，优先使用 metadata，详见文档：https://nextjs.org/docs/app/api-reference/functions/generate-metadata
-   1. 三方 CSS、字体等资源可在 `globals.css` 中顶部通过 `@import` 引入或使用 next/font
-   2. preload, preconnect, dns-prefetch 通过 ReactDOM 的 preload、preconnect、dns-prefetch 方法引入
-   3. json-ld 可阅读 https://nextjs.org/docs/app/guides/json-ld
-
-## UI 设计与组件规范 (UI & Styling Standards)
-
-- 模板默认预装核心组件库 `shadcn/ui`，位于`src/components/ui/`目录下
-- Next.js 项目**必须默认**采用 shadcn/ui 组件、风格和规范，**除非用户指定用其他的组件和规范。**
+- `pnpm ts-check` / `pnpm lint --quiet`：静态检查
+- API 冒烟测试通过 test_run 执行，覆盖 7 个端点（列表/筛选/详情/新增/批量删除/单个删除/CSV导入/统计）
