@@ -8,10 +8,10 @@ import {
   ArrowDown,
   ArrowUp,
   Check,
+  Clapperboard,
   Download,
   ImagePlus,
   Layers,
-  Lightbulb,
   Loader2,
   Plus,
   RefreshCw,
@@ -24,11 +24,13 @@ import {
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
+  SHOT_ROLE_META,
   TYPE_META,
+  type CreativeBrief,
   type ImageElement,
   type ImageStructure,
   type RemixResult,
-  type SceneSuggestion,
+  type Shot,
 } from '@/lib/image-types';
 import type { PagedResult, ProductWithScore } from '@/lib/types';
 import { cn } from '@/lib/utils';
@@ -51,7 +53,7 @@ interface AngleBatch {
 const STEP_DEFS = [
   { n: 1, label: '选择主图' },
   { n: 2, label: 'AI 解析结构' },
-  { n: 3, label: '场景联想与生成' },
+  { n: 3, label: '广告策划与生成' },
 ];
 
 function readAsDataUrl(file: File): Promise<string> {
@@ -76,9 +78,9 @@ export default function ImageStudioPage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
 
-  // ------- 场景联想 -------
-  const [scenes, setScenes] = useState<SceneSuggestion[]>([]);
-  const [loadingScenes, setLoadingScenes] = useState(false);
+  // ------- 广告策划案 -------
+  const [brief, setBrief] = useState<CreativeBrief | null>(null);
+  const [loadingBrief, setLoadingBrief] = useState(false);
 
   // ------- 生成 -------
   const [extra, setExtra] = useState('');
@@ -118,7 +120,7 @@ export default function ImageStudioPage() {
   const pickLibrary = useCallback((p: ProductWithScore) => {
     setSelected({ preview: p.image, serverRef: p.image, name: p.name });
     setStructure(null);
-    setScenes([]);
+    setBrief(null);
     setResults([]);
     setAngleBatches([]);
     setActiveId(null);
@@ -137,7 +139,7 @@ export default function ImageStudioPage() {
       if (!res.ok || !json.url) throw new Error(json.error ?? '上传失败');
       setSelected({ preview: dataUrl, serverRef: json.url, name: file.name });
       setStructure(null);
-      setScenes([]);
+      setBrief(null);
       setResults([]);
       setAngleBatches([]);
       setActiveId(null);
@@ -150,22 +152,22 @@ export default function ImageStudioPage() {
     }
   }, []);
 
-  /** 场景联想：基于解析结构让 AI 构思使用场景 */
-  const loadScenes = useCallback(async (s: ImageStructure) => {
-    setLoadingScenes(true);
+  /** 广告制作 Agent：基于解析结构产出 Listing 视觉策划案 */
+  const loadBrief = useCallback(async (s: ImageStructure) => {
+    setLoadingBrief(true);
     try {
-      const res = await fetch('/api/image/scenes', {
+      const res = await fetch('/api/image/brief', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ structure: s }),
       });
-      const json = (await res.json()) as { scenes?: SceneSuggestion[]; error?: string };
-      if (!res.ok || !json.scenes) throw new Error(json.error ?? '场景联想失败');
-      setScenes(json.scenes);
+      const json = (await res.json()) as { brief?: CreativeBrief; error?: string };
+      if (!res.ok || !json.brief) throw new Error(json.error ?? '策划案生成失败');
+      setBrief(json.brief);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : '场景联想失败');
+      toast.error(err instanceof Error ? err.message : '策划案生成失败');
     } finally {
-      setLoadingScenes(false);
+      setLoadingBrief(false);
     }
   }, []);
 
@@ -185,18 +187,18 @@ export default function ImageStudioPage() {
         elements: json.structure.elements.map((e, i) => ({ ...e, id: `e${i + 1}` })),
       };
       setStructure(s);
-      setScenes([]);
+      setBrief(null);
       setResults([]);
       setAngleBatches([]);
       setActiveId(s.elements.find((e) => e.type === 'product')?.id ?? s.elements[0]?.id ?? null);
       toast.success(`识别完成：拆解出 ${s.elements.length} 个结构元素`);
-      void loadScenes(s);
+      void loadBrief(s);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '解析失败');
     } finally {
       setAnalyzing(false);
     }
-  }, [selected, analyzing, loadScenes]);
+  }, [selected, analyzing, loadBrief]);
 
   // ------- 结构编辑 -------
   const patchElement = useCallback((id: string, patch: Partial<ImageElement>) => {
@@ -226,20 +228,45 @@ export default function ImageStudioPage() {
     setActiveId((cur) => (cur === id ? null : cur));
   }, []);
 
-  // ------- 场景编辑 -------
-  const patchScene = useCallback((id: string, patch: Partial<SceneSuggestion>) => {
-    setScenes((prev) => prev.map((s) => (s.id === id ? { ...s, ...patch } : s)));
+  // ------- 策划案编辑 -------
+  const patchBrief = useCallback((patch: Partial<Omit<CreativeBrief, 'shots'>>) => {
+    setBrief((prev) => (prev ? { ...prev, ...patch } : prev));
   }, []);
 
-  const removeScene = useCallback((id: string) => {
-    setScenes((prev) => prev.filter((s) => s.id !== id));
+  const patchShot = useCallback((id: string, patch: Partial<Shot>) => {
+    setBrief((prev) =>
+      prev
+        ? { ...prev, shots: prev.shots.map((s) => (s.id === id ? { ...s, ...patch } : s)) }
+        : prev,
+    );
   }, []);
 
-  const addScene = useCallback(() => {
-    setScenes((prev) => [
-      ...prev,
-      { id: crypto.randomUUID(), name: '自定义场景', sellingPoint: '', emotion: '', scene: '' },
-    ]);
+  const removeShot = useCallback((id: string) => {
+    setBrief((prev) =>
+      prev ? { ...prev, shots: prev.shots.filter((s) => s.id !== id) } : prev,
+    );
+  }, []);
+
+  const addShot = useCallback(() => {
+    setBrief((prev) =>
+      prev
+        ? {
+            ...prev,
+            shots: [
+              ...prev.shots,
+              {
+                id: crypto.randomUUID(),
+                role: 'scene' as const,
+                name: '自定义镜头',
+                sellingPoint: '',
+                emotion: '',
+                scene: '',
+                composition: '中景，产品占画面 1/2，位于视觉中心',
+              },
+            ],
+          }
+        : prev,
+    );
   }, []);
 
   /** 一键打乱：除背景外的元素两两交换位置 */
@@ -309,24 +336,24 @@ export default function ImageStudioPage() {
 
   // ------- 生成与下载 -------
   const generate = useCallback(async () => {
-    if (!selected || !structure || scenes.length === 0 || generating) return;
+    if (!selected || !structure || !brief || brief.shots.length === 0 || generating) return;
     setGenerating(true);
     try {
       const res = await fetch('/api/image/remix', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image: selected.serverRef, structure, scenes, extra }),
+        body: JSON.stringify({ image: selected.serverRef, structure, brief, extra }),
       });
       const json = (await res.json()) as { images?: RemixResult[]; error?: string };
       if (!res.ok || !json.images) throw new Error(json.error ?? '生成失败');
       setResults(json.images);
-      toast.success(`已生成 ${json.images.length} 张场景主图`);
+      toast.success(`已生成 ${json.images.length} 张广告主图`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : '生成失败');
     } finally {
       setGenerating(false);
     }
-  }, [selected, structure, scenes, extra, generating]);
+  }, [selected, structure, brief, extra, generating]);
 
   const downloadImage = useCallback(async (url: string, variant: string, index: number) => {
     try {
@@ -343,12 +370,12 @@ export default function ImageStudioPage() {
     }
   }, []);
 
-  /** 对满意的场景图做二次生成：同场景、不同机位/构图 */
+  /** 对满意的镜头图做二次生成：同场景、不同机位/构图 */
   const generateAngles = useCallback(
     async (r: RemixResult) => {
-      const scene = scenes.find((s) => s.id === r.sceneId);
-      if (!scene) {
-        toast.error('该图的来源场景已被删除，无法做多角度衍生');
+      const shot = brief?.shots.find((s) => s.id === r.sceneId);
+      if (!shot) {
+        toast.error('该图的来源镜头已被删除，无法做多角度衍生');
         return;
       }
       if (!structure || anglesFor) return;
@@ -359,7 +386,7 @@ export default function ImageStudioPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             image: r.url,
-            scene,
+            shot,
             productName: structure.productName,
             extra,
           }),
@@ -367,17 +394,17 @@ export default function ImageStudioPage() {
         const json = (await res.json()) as { images?: RemixResult[]; error?: string };
         if (!res.ok || !json.images) throw new Error(json.error ?? '多角度生成失败');
         setAngleBatches((prev) => [
-          { id: crypto.randomUUID(), sceneName: scene.name, results: json.images ?? [] },
+          { id: crypto.randomUUID(), sceneName: shot.name, results: json.images ?? [] },
           ...prev,
         ]);
-        toast.success(`已生成「${scene.name}」的 ${json.images.length} 个视角`);
+        toast.success(`已生成「${shot.name}」的 ${json.images.length} 个视角`);
       } catch (err) {
         toast.error(err instanceof Error ? err.message : '多角度生成失败');
       } finally {
         setAnglesFor(null);
       }
     },
-    [scenes, structure, extra, anglesFor],
+    [brief, structure, extra, anglesFor],
   );
 
   const stepsDone = [Boolean(selected), Boolean(structure), results.length > 0];
@@ -389,7 +416,7 @@ export default function ImageStudioPage() {
         <div>
           <h1 className="text-xl font-semibold text-zinc-900">主图工作台</h1>
           <p className="mt-1 text-[13px] text-zinc-500">
-            AI 拆解主图结构，从卖点发散场景创意，对满意的场景可二次生成多角度构图
+            AI 拆解主图结构，广告制作 Agent 输出 Listing 拍摄策划案，边界受控地批量产出广告主图
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -680,100 +707,146 @@ export default function ImageStudioPage() {
 
           {structure && (
             <p className="mt-3 border-t border-zinc-100 pt-3 text-[11px] leading-relaxed text-zinc-400">
-              拖动产品框可决定生成图中产品的摆放位置；到下方「场景联想」编辑场景后即可生成
+              拖动产品框可决定生成图中产品的摆放位置；到下方「广告拍摄策划案」确认策略与镜头后即可生成
             </p>
           )}
         </section>
       </div>
 
-      {/* 场景联想 */}
+      {/* 广告拍摄策划案 */}
       {structure && (
         <section className="rounded-xl border border-zinc-200 bg-white p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="flex items-center gap-1.5 text-[15px] font-semibold text-zinc-900">
-                <Lightbulb className="h-4 w-4 text-[#f59e0b]" />
-                场景联想
+                <Clapperboard className="h-4 w-4 text-[#fe2c55]" />
+                广告拍摄策划案
               </h2>
               <p className="mt-0.5 text-[11px] text-zinc-400">
-                从产品卖点发散场景创意，画面传达情绪与理念、不含任何文字——靠场景的温度打动买家
+                广告制作 Agent 产出：先定传播策略，再开拍摄清单——每张图各司其职，边界清晰，产品永远是主角
               </p>
             </div>
             <div className="flex gap-2">
-              <Button size="sm" variant="outline" onClick={addScene}>
+              <Button size="sm" variant="outline" onClick={addShot} disabled={!brief}>
                 <Plus className="h-3.5 w-3.5" />
-                自定义场景
+                自定义镜头
               </Button>
               <Button
                 size="sm"
                 variant="outline"
-                disabled={loadingScenes}
-                onClick={() => void loadScenes(structure)}
+                disabled={loadingBrief}
+                onClick={() => void loadBrief(structure)}
               >
-                <RefreshCw className={cn('h-3.5 w-3.5', loadingScenes && 'animate-spin')} />
-                换一批
+                <RefreshCw className={cn('h-3.5 w-3.5', loadingBrief && 'animate-spin')} />
+                换一版策划
               </Button>
             </div>
           </div>
 
-          {loadingScenes && scenes.length === 0 ? (
-            <div className="grid gap-3 sm:grid-cols-3">
-              {Array.from({ length: 3 }).map((_, i) => (
+          {loadingBrief && !brief ? (
+            <div className="grid gap-3 sm:grid-cols-4">
+              {Array.from({ length: 4 }).map((_, i) => (
                 <div
                   key={i}
-                  className="flex h-36 flex-col items-center justify-center gap-2 rounded-lg bg-zinc-50 text-zinc-400"
+                  className="flex h-40 flex-col items-center justify-center gap-2 rounded-lg bg-zinc-50 text-zinc-400"
                 >
-                  <Loader2 className="h-5 w-5 animate-spin text-[#f59e0b]" />
-                  <p className="text-xs">AI 正在联想使用场景…</p>
+                  <Loader2 className="h-5 w-5 animate-spin text-[#fe2c55]" />
+                  <p className="text-xs">广告制作 Agent 正在撰写策划案…</p>
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-3">
-              {scenes.map((s) => (
-                <div
-                  key={s.id}
-                  className="rounded-lg border border-zinc-200 p-3 transition-colors duration-150 hover:border-zinc-300"
-                >
-                  <div className="flex items-center gap-1.5">
+          ) : brief ? (
+            <>
+              {/* 传播策略 */}
+              <div className="mb-3 grid gap-2 sm:grid-cols-3">
+                {(
+                  [
+                    { key: 'audience', label: '目标人群', ph: '如：20-35岁通勤女性' },
+                    { key: 'coreSellingPoint', label: '核心卖点', ph: '只选一个最能打的' },
+                    { key: 'hook', label: '传播钩子', ph: '让人一眼记住的记忆点' },
+                  ] as const
+                ).map((f) => (
+                  <div
+                    key={f.key}
+                    className="rounded-lg border border-zinc-200 bg-zinc-50/60 px-3 py-2"
+                  >
+                    <p className="text-[11px] font-medium text-zinc-500">{f.label}</p>
                     <Input
-                      value={s.name}
-                      onChange={(e) => patchScene(s.id, { name: e.target.value })}
-                      placeholder="场景名"
-                      className="h-7 flex-1 border-0 bg-transparent px-1 text-[13px] font-semibold shadow-none focus-visible:ring-1"
+                      value={brief[f.key]}
+                      onChange={(e) => patchBrief({ [f.key]: e.target.value })}
+                      placeholder={f.ph}
+                      className="mt-1 h-7 border-0 bg-transparent px-0 text-[13px] font-semibold text-zinc-900 shadow-none focus-visible:ring-0"
                     />
-                    <button
-                      type="button"
-                      aria-label="删除场景"
-                      onClick={() => removeScene(s.id)}
-                      className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-[#fe2c55]"
+                  </div>
+                ))}
+              </div>
+
+              {/* 拍摄清单 */}
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                {brief.shots.map((shot) => {
+                  const meta = SHOT_ROLE_META[shot.role] ?? SHOT_ROLE_META.scene;
+                  return (
+                    <div
+                      key={shot.id}
+                      className="rounded-lg border border-zinc-200 p-3 transition-colors duration-150 hover:border-zinc-300"
                     >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                  <div className="mt-1 flex gap-1.5">
-                    <Input
-                      value={s.sellingPoint}
-                      onChange={(e) => patchScene(s.id, { sellingPoint: e.target.value })}
-                      placeholder="卖点，如：12小时持妆"
-                      className="h-7 flex-1 border-0 bg-[#fe2c55]/10 px-2 text-[11px] text-[#fe2c55] shadow-none placeholder:text-[#fe2c55]/50 focus-visible:ring-1"
-                    />
-                    <Input
-                      value={s.emotion}
-                      onChange={(e) => patchScene(s.id, { emotion: e.target.value })}
-                      placeholder="情绪/理念，如：从容自信"
-                      className="h-7 flex-1 border-0 bg-amber-50 px-2 text-[11px] text-amber-700 shadow-none placeholder:text-amber-400 focus-visible:ring-1"
-                    />
-                  </div>
-                  <textarea
-                    value={s.scene}
-                    onChange={(e) => patchScene(s.id, { scene: e.target.value })}
-                    placeholder="画面描述：环境 / 光线 / 道具 / 氛围 / 人物状态"
-                    rows={4}
-                    className="mt-2 w-full resize-none rounded-md border border-zinc-200 bg-white px-2 py-1.5 text-xs leading-relaxed text-zinc-700 outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-1 focus:ring-zinc-200"
-                  />
-                </div>
-              ))}
+                      <div className="flex items-center gap-1.5">
+                        <span
+                          className="shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium text-white"
+                          style={{ backgroundColor: meta.color }}
+                        >
+                          {meta.label}
+                        </span>
+                        <Input
+                          value={shot.name}
+                          onChange={(e) => patchShot(shot.id, { name: e.target.value })}
+                          placeholder="画面短名"
+                          className="h-7 flex-1 border-0 bg-transparent px-1 text-[13px] font-semibold shadow-none focus-visible:ring-1"
+                        />
+                        <button
+                          type="button"
+                          aria-label="删除镜头"
+                          onClick={() => removeShot(shot.id)}
+                          className="rounded p-1 text-zinc-400 hover:bg-red-50 hover:text-[#fe2c55]"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                      <div className="mt-1 flex gap-1.5">
+                        <Input
+                          value={shot.sellingPoint}
+                          onChange={(e) => patchShot(shot.id, { sellingPoint: e.target.value })}
+                          placeholder="卖点"
+                          className="h-7 flex-1 border-0 bg-[#fe2c55]/10 px-2 text-[11px] text-[#fe2c55] shadow-none placeholder:text-[#fe2c55]/50 focus-visible:ring-1"
+                        />
+                        <Input
+                          value={shot.emotion}
+                          onChange={(e) => patchShot(shot.id, { emotion: e.target.value })}
+                          placeholder="情绪/理念"
+                          className="h-7 flex-1 border-0 bg-amber-50 px-2 text-[11px] text-amber-700 shadow-none placeholder:text-amber-400 focus-visible:ring-1"
+                        />
+                      </div>
+                      <textarea
+                        value={shot.scene}
+                        onChange={(e) => patchShot(shot.id, { scene: e.target.value })}
+                        placeholder="画面描述：环境 / 光线 / 道具 / 人物状态"
+                        rows={3}
+                        className="mt-2 w-full resize-none rounded-md border border-zinc-200 bg-white px-2 py-1.5 text-xs leading-relaxed text-zinc-700 outline-none placeholder:text-zinc-400 focus:border-zinc-300 focus:ring-1 focus:ring-zinc-200"
+                      />
+                      <Input
+                        value={shot.composition}
+                        onChange={(e) => patchShot(shot.id, { composition: e.target.value })}
+                        placeholder="构图规范：景别 / 产品占比 / 位置"
+                        className="mt-1.5 h-7 border-zinc-200 bg-white px-2 text-[11px] text-zinc-500 shadow-none"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          ) : (
+            <div className="rounded-lg bg-zinc-50 py-8 text-center text-xs text-zinc-400">
+              策划案加载失败，点击「换一版策划」重试
             </div>
           )}
 
@@ -786,7 +859,7 @@ export default function ImageStudioPage() {
             />
             <Button
               className="bg-[#fe2c55] text-white hover:bg-[#e6254c]"
-              disabled={scenes.length === 0 || generating}
+              disabled={!brief || brief.shots.length === 0 || generating}
               onClick={generate}
             >
               {generating ? (
@@ -795,8 +868,8 @@ export default function ImageStudioPage() {
                 <Sparkles className="h-4 w-4" />
               )}
               {generating
-                ? '正在生成场景主图（4K，约 1 分钟）…'
-                : `按场景生成 ${scenes.length} 张主图（4K 无文字）`}
+                ? '正在拍摄广告主图（4K，约 1 分钟）…'
+                : `按拍摄清单生成 ${brief?.shots.length ?? 0} 张广告主图（4K）`}
             </Button>
           </div>
         </section>
@@ -808,7 +881,7 @@ export default function ImageStudioPage() {
           <h2 className="mb-3 text-[15px] font-semibold text-zinc-900">生成结果</h2>
           <div className="grid gap-3 sm:grid-cols-3">
             {generating &&
-              Array.from({ length: scenes.length || 3 }).map((_, i) => (
+              Array.from({ length: brief?.shots.length || 4 }).map((_, i) => (
                 <div
                   key={i}
                   className="flex aspect-square flex-col items-center justify-center gap-2 rounded-lg bg-zinc-50 text-zinc-400"
@@ -865,7 +938,7 @@ export default function ImageStudioPage() {
               ))}
           </div>
           <p className="mt-2 text-[11px] text-zinc-400">
-            生成图为 4K 生活方式场景图，可直接用于 Listing；点击「多角度」可对满意的场景二次生成 4 个不同机位的同场景图
+            按策划案职能生成的 4K 广告主图，可直接用于 Listing；点击「多角度」可对满意的镜头二次生成 4 个不同机位的同场景图
           </p>
         </section>
       )}

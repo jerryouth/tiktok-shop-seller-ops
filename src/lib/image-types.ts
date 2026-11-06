@@ -38,6 +38,50 @@ export interface SceneSuggestion {
   scene: string;
 }
 
+// ---------------------------------------------------------------------------
+// 广告制作 Agent：Listing 视觉策划案
+// ---------------------------------------------------------------------------
+
+/** 拍摄清单中每张图的职能 */
+export type ShotRole = 'hero' | 'proof' | 'scene' | 'detail' | 'mood';
+
+export const SHOT_ROLES: ShotRole[] = ['hero', 'proof', 'scene', 'detail', 'mood'];
+
+export const SHOT_ROLE_META: Record<ShotRole, { label: string; color: string; duty: string }> = {
+  hero: { label: '首图定调', color: '#FE2C55', duty: '决定点击率，产品绝对主角' },
+  proof: { label: '卖点实证', color: '#00B8B0', duty: '用场景证明核心卖点' },
+  scene: { label: '使用场景', color: '#6366F1', duty: '制造代入感与向往' },
+  detail: { label: '细节特写', color: '#D97706', duty: '材质工艺建立品质信任' },
+  mood: { label: '氛围情绪', color: '#8B5CF6', duty: '传递品牌理念与温度' },
+};
+
+/** 拍摄清单条目（一个镜头） */
+export interface Shot {
+  id: string;
+  role: ShotRole;
+  /** 画面短名，如「首图定调」「雨中共行」 */
+  name: string;
+  /** 本图服务的卖点 */
+  sellingPoint: string;
+  /** 传达的情绪与理念 */
+  emotion: string;
+  /** 画面描述（环境/光线/道具/人物状态） */
+  scene: string;
+  /** 构图规范（景别/产品占比/位置） */
+  composition: string;
+}
+
+/** Listing 视觉策划案（广告制作 Agent 产出） */
+export interface CreativeBrief {
+  /** 目标人群 */
+  audience: string;
+  /** 核心卖点（唯一） */
+  coreSellingPoint: string;
+  /** 传播钩子/视觉记忆点 */
+  hook: string;
+  shots: Shot[];
+}
+
 /** 生成结果 */
 export interface RemixResult {
   url: string;

@@ -3,11 +3,15 @@
 import { Config, ImageGenerationClient, LLMClient } from 'coze-coding-dev-sdk';
 import {
   ELEMENT_TYPES,
+  SHOT_ROLE_META,
+  SHOT_ROLES,
+  type CreativeBrief,
   type ElementType,
   type ImageElement,
   type ImageStructure,
   type RemixResult,
-  type SceneSuggestion,
+  type Shot,
+  type ShotRole,
 } from './image-types';
 
 const VISION_MODEL = 'doubao-seed-2-0-pro-260215';
@@ -156,38 +160,47 @@ export async function analyzeImage(
 }
 
 // ---------------------------------------------------------------------------
-// 2. 场景联想：从产品卖点出发做创意发散，场景传达情绪与理念（而非摆拍）
+// 2. 广告制作 Agent：产出 Listing 视觉策划案（Creative Brief）
 // ---------------------------------------------------------------------------
 
-const SCENE_SYSTEM_PROMPT = `你是顶级电商视觉创意总监，最擅长从产品卖点出发做场景创意发散：先提炼卖点，再把卖点演绎成有生活温度的真实场景，让画面传达一种情绪与理念，让目标用户产生"这就是我想要的生活"的向往。你从不依赖任何文字标语，只靠画面讲故事。`;
+const BRIEF_SYSTEM_PROMPT = `你是一位有 15 年经验的电商广告制作总监，操盘过数百个 TikTok Shop / 亚马逊爆款 Listing 的视觉策划与拍摄。你深知 Listing 图片不是艺术摄影，每一张都有明确的商业任务：首图抢点击、卖点图建信任、场景图造向往、细节图消顾虑。你的策划案永远边界清晰——产品是绝对主角，场景只是卖点的证据，情绪和温度服务于"让人想买"，而不是自我表达。你从不依赖文字标语，只靠画面完成销售。`;
 
-interface RawScene {
+interface RawShot {
+  role?: unknown;
   name?: unknown;
   sellingPoint?: unknown;
   emotion?: unknown;
   scene?: unknown;
+  composition?: unknown;
 }
 
-function sanitizeScene(raw: RawScene, index: number): SceneSuggestion | null {
+function sanitizeShot(raw: RawShot, index: number): Shot | null {
   const name = typeof raw.name === 'string' ? raw.name.trim() : '';
-  const sellingPoint = typeof raw.sellingPoint === 'string' ? raw.sellingPoint.trim() : '';
-  const emotion = typeof raw.emotion === 'string' ? raw.emotion.trim() : '';
   const scene = typeof raw.scene === 'string' ? raw.scene.trim() : '';
   if (!name || !scene) return null;
+  const role =
+    typeof raw.role === 'string' && (SHOT_ROLES as string[]).includes(raw.role)
+      ? (raw.role as ShotRole)
+      : 'scene';
+  const sellingPoint = typeof raw.sellingPoint === 'string' ? raw.sellingPoint.trim() : '';
+  const emotion = typeof raw.emotion === 'string' ? raw.emotion.trim() : '';
+  const composition = typeof raw.composition === 'string' ? raw.composition.trim() : '';
   return {
-    id: `s${index + 1}`,
+    id: `shot-${index + 1}`,
+    role,
     name,
     sellingPoint: sellingPoint || name,
-    emotion: emotion || '向往的生活感',
+    emotion: emotion || '向往与信赖',
     scene,
+    composition: composition || SHOT_ROLE_META[role].duty,
   };
 }
 
-/** 基于产品结构与原图卖点，从卖点发散联想 3 个有温度、传达理念的使用场景 */
-export async function suggestScenes(
+/** 广告制作 Agent：基于产品信息产出 Listing 视觉策划案（策略 + 拍摄清单） */
+export async function produceCreativeBrief(
   structure: ImageStructure,
   headers?: Record<string, string>,
-): Promise<SceneSuggestion[]> {
+): Promise<CreativeBrief> {
   assertImageStudioReady();
   const client = new LLMClient(new Config(), headers);
   const product = structure.elements.find((e) => e.type === 'product');
@@ -198,7 +211,7 @@ export async function suggestScenes(
     .join('；');
   const response = await client.invoke(
     [
-      { role: 'system', content: SCENE_SYSTEM_PROMPT },
+      { role: 'system', content: BRIEF_SYSTEM_PROMPT },
       {
         role: 'user',
         content: `产品名称：${structure.productName}
@@ -206,30 +219,48 @@ export async function suggestScenes(
 原图风格：${structure.style || '电商摄影'}
 原图卖点文案：${sellingTexts || '（原图无文字卖点，请从产品特征自行提炼）'}
 
-请按两步思考：
-第一步，从产品特征与原图文案中提炼 2-3 个核心卖点（如持妆、便携、安全、省时）；
-第二步，围绕卖点做场景发散，构思 3 个互不重复的真实使用场景。每个场景必须：
-1. 以卖点为原点：场景是该卖点的生活化演绎，让用户"看见"卖点带来的好处，而非生硬摆拍
-2. 有温度：场景里有人情味、情绪或生活态度（清晨的从容、朋友相聚的松弛、独处的治愈），传达一种理念
-3. 具体可拍：环境、光线、道具、氛围、人物状态都能直接视觉化，避免空泛形容词堆砌
-4. 差异明显：覆盖不同的时间、空间或人群情绪（例如晨间/夜晚、居家/户外、独处/社交）
+请为该产品制定一份 Listing 视觉拍摄策划案，分三步：
+
+第一步：定传播策略
+- 目标人群：最会买它的人是谁，一句话
+- 核心卖点：只选一个最能打的卖点（贪多必失）
+- 传播钩子：一个让人一眼记住、愿意截图分享的视觉记忆点
+
+第二步：开拍摄清单，固定 4 个镜头，各司其职：
+1. hero 首图定调：产品占画面 50% 以上，简洁有冲击力，3 米外一眼认出产品，决定点击率
+2. proof 卖点实证：用一个真实场景证明核心卖点，场景是卖点的证据而不是风景照
+3. scene 使用场景：制造"这就是我想要的生活"的代入感与向往，但产品仍占画面至少 1/3 且是第一眼焦点
+4. detail 细节特写：材质/工艺/质感微距，消除品质顾虑
+
+第三步：为每个镜头写明边界，遵守铁律：
+- 产品永远是主角：清晰锐利，场景、道具、人物都为卖点服务，禁止喧宾夺主
+- 人物出现时不遮挡产品、不露正脸，只作氛围陪衬
+- 可以有温度有情绪，但目标是"让人想买"，不是拍文艺片
 
 严格 JSON 返回（不要 markdown 代码块）：
-{"scenes":[{"name":"场景短名(2-6字)","sellingPoint":"发散源头的卖点(10字内)","emotion":"画面传达的情绪与理念(12字内)","scene":"画面描述(60-90字，含环境/光线/道具/氛围/人物状态)"}]}`,
+{"audience":"目标人群(15字内)","coreSellingPoint":"核心卖点(12字内)","hook":"传播钩子(15字内)","shots":[{"role":"hero|proof|scene|detail","name":"画面短名(2-6字)","sellingPoint":"本镜头服务的卖点(10字内)","emotion":"传达的情绪与理念(12字内)","scene":"画面描述(50-80字，含环境/光线/道具/人物状态)","composition":"构图规范(景别/产品占比/位置，25字内)"}]}`,
       },
     ],
-    { model: VISION_MODEL, temperature: 0.75 },
+    { model: VISION_MODEL, temperature: 0.7 },
   );
   const parsed = extractJson(response.content);
-  const rawScenes = Array.isArray(parsed.scenes) ? (parsed.scenes as RawScene[]) : [];
-  const scenes = rawScenes
-    .map((s, i) => sanitizeScene(s, i))
-    .filter((s): s is SceneSuggestion => s !== null)
-    .slice(0, 4);
-  if (scenes.length === 0) {
-    throw new Error('场景联想失败，请重试');
+  const rawShots = Array.isArray(parsed.shots) ? (parsed.shots as RawShot[]) : [];
+  const shots = rawShots
+    .map((s, i) => sanitizeShot(s, i))
+    .filter((s): s is Shot => s !== null)
+    .slice(0, 5);
+  if (shots.length === 0) {
+    throw new Error('策划案生成失败，请重试');
   }
-  return scenes;
+  return {
+    audience: typeof parsed.audience === 'string' && parsed.audience.trim() ? parsed.audience.trim() : '跨境消费人群',
+    coreSellingPoint:
+      typeof parsed.coreSellingPoint === 'string' && parsed.coreSellingPoint.trim()
+        ? parsed.coreSellingPoint.trim()
+        : shots[0].sellingPoint,
+    hook: typeof parsed.hook === 'string' && parsed.hook.trim() ? parsed.hook.trim() : '产品质感直击',
+    shots,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -248,28 +279,44 @@ export function posWord(bbox: [number, number, number, number]): string {
   return `画面${v}${h}角区域`;
 }
 
-/** 基于使用场景构建图生图 prompt（卖点发散 + 情绪传达 + 画面无文字） */
-export function buildScenePrompts(
+/** 基于拍摄清单构建图生图 prompt（广告大片定位 + 职能分工 + 边界控制） */
+export function buildShotPrompts(
   structure: ImageStructure,
-  scenes: SceneSuggestion[],
+  brief: CreativeBrief,
   extra?: string,
 ): { prompt: string; variant: string; note: string; sceneId: string }[] {
   const product = structure.elements.find((e) => e.type === 'product');
   const productDesc = product?.description || structure.productName;
   const pos = product ? posWord(product.bbox) : '画面正中央';
   const extraLine = extra?.trim() ? `\n用户额外要求：${extra.trim()}` : '';
-  return scenes.map((s) => ({
-    variant: s.name,
-    note: `${s.sellingPoint} · ${s.emotion}`,
-    sceneId: s.id,
-    prompt: `高端生活方式电商摄影：${structure.productName}（${productDesc}）。
-严格保持参考图中产品的外观、颜色、材质、形状与细节完全一致，将产品自然融入以下真实使用场景，产品位于${pos}，始终是画面的视觉焦点：
-创意原点（产品卖点）：${s.sellingPoint}
-场景画面：${s.scene}
-画面要传达的情绪与理念：${s.emotion}——让目标用户一眼感受到卖点带来的好处，产生"这就是我想要的生活"的代入感与向往。
-摄影要求：杂志级生活方式摄影质感，自然真实的光影层次与色调，画面有生活温度和呼吸感，避免生硬的产品摆拍感，浅景深背景适度虚化，构图高级，正方形构图。${extraLine}
-硬性要求：画面中不要出现任何文字、字母、数字、标签、logo 或水印。`,
-  }));
+  return brief.shots.map((shot) => {
+    const meta = SHOT_ROLE_META[shot.role];
+    return {
+      variant: shot.name,
+      note: `${meta.label} · ${shot.sellingPoint}`,
+      sceneId: shot.id,
+      prompt: `TikTok Shop 高转化电商广告大片：${structure.productName}（${productDesc}）。
+本图职能：${meta.label}——${meta.duty}
+服务卖点：${shot.sellingPoint}
+画面情绪：${shot.emotion}
+画面内容：${shot.scene}
+构图规范：${compositionLine(shot)}；产品摆放在${pos}。
+传播策略：目标人群是${brief.audience}，画面要形成记忆点——${brief.hook}。
+
+商业边界（必须严格遵守）：
+1. 产品是画面绝对主角，清晰锐利、第一眼可辨；场景、道具、人物只为证明卖点服务，绝不喧宾夺主；
+2. 商业广告大片质感：光影高级、色调统一干净，有生活温度但保持商业片的克制，拒绝文艺片式的松散构图；
+3. 严格保持参考图中产品的外观、颜色、材质、形状与细节完全一致；
+4. 画面中不要出现任何文字、字母、数字、标签、logo 或水印；
+5. 正方形构图。${extraLine}`,
+    };
+  });
+}
+
+function compositionLine(shot: Shot): string {
+  if (shot.role === 'hero') return `${shot.composition}（产品占比须达 50% 以上）`;
+  if (shot.role === 'detail') return `${shot.composition}（微距特写，产品充满画面主体）`;
+  return `${shot.composition}（产品占比不少于 1/3，为视觉第一焦点）`;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,21 +347,21 @@ export const ANGLE_PRESETS = [
   },
 ] as const;
 
-/** 基于选中场景构建多角度图生图 prompt（参考图为该场景已生成的图，保持场景连贯） */
+/** 基于选中镜头构建多角度图生图 prompt（参考图为该镜头已生成的图，保持场景连贯） */
 export function buildAnglePrompts(
-  scene: SceneSuggestion,
+  shot: Shot,
   productName: string,
   extra?: string,
 ): { prompt: string; variant: string; note: string }[] {
   const extraLine = extra?.trim() ? `\n用户额外要求：${extra.trim()}` : '';
   return ANGLE_PRESETS.map((a) => ({
     variant: a.name,
-    note: scene.name,
-    prompt: `生活方式电商摄影的构图变换：参考图中的产品与场景保持不变，仅改变拍摄视角与构图。
-场景：${scene.scene}
-画面要传达的情绪与理念：${scene.emotion}
+    note: shot.name,
+    prompt: `电商广告大片的机位变换：参考图中的产品、场景与光线保持不变，仅改变拍摄视角与构图。
+场景：${shot.scene}
+画面情绪：${shot.emotion}
 新的视角与构图：${a.desc}
-要求：场景环境、道具、光线与色调氛围与参考图保持连贯一致，像是同一场拍摄的不同机位；产品（${productName}）的外观、颜色、材质、形状与细节和参考图完全一致；画面有生活温度，避免生硬摆拍，正方形构图。${extraLine}
+要求：场景环境、道具、光线与色调氛围与参考图保持连贯一致，像同一场广告拍摄的不同机位；产品（${productName}）的外观、颜色、材质、形状与细节和参考图完全一致，且始终是画面清晰焦点；保持商业广告大片质感，正方形构图。${extraLine}
 硬性要求：画面中不要出现任何文字、字母、数字、标签、logo 或水印。`,
   }));
 }
@@ -373,29 +420,29 @@ export async function generateImages(
   return results;
 }
 
-/** 以原图为参考，按使用场景批量生成场景化主图 */
+/** 以原图为参考，按拍摄清单批量生成广告主图 */
 export async function remixImage(
   referenceImageUrl: string,
   structure: ImageStructure,
-  scenes: SceneSuggestion[],
+  brief: CreativeBrief,
   extra: string | undefined,
   headers: Record<string, string>,
 ): Promise<RemixResult[]> {
-  if (scenes.length === 0) {
-    throw new Error('请至少保留一个使用场景');
+  if (brief.shots.length === 0) {
+    throw new Error('请至少保留一个拍摄镜头');
   }
-  const prompts = buildScenePrompts(structure, scenes, extra);
+  const prompts = buildShotPrompts(structure, brief, extra);
   return generateImages(referenceImageUrl, prompts, headers);
 }
 
-/** 以选中场景已生成的图为参考，衍生多角度/不同构图的同场景图 */
+/** 以选中镜头已生成的图为参考，衍生多角度/不同构图的同场景图 */
 export async function remixAngles(
   selectedImageUrl: string,
-  scene: SceneSuggestion,
+  shot: Shot,
   productName: string,
   extra: string | undefined,
   headers: Record<string, string>,
 ): Promise<RemixResult[]> {
-  const prompts = buildAnglePrompts(scene, productName, extra);
+  const prompts = buildAnglePrompts(shot, productName, extra);
   return generateImages(selectedImageUrl, prompts, headers);
 }

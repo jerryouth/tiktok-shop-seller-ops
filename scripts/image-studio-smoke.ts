@@ -4,10 +4,10 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import {
   buildAnglePrompts,
-  buildScenePrompts,
+  buildShotPrompts,
   generateImages,
+  produceCreativeBrief,
   remixImage,
-  suggestScenes,
 } from '../src/lib/image-studio';
 import type { ImageStructure, RemixResult } from '../src/lib/image-types';
 
@@ -57,30 +57,36 @@ async function main(): Promise<void> {
     if (el.bbox[2] <= 0 || el.bbox[3] <= 0) throw new Error(`退化 bbox 未被过滤: ${el.name}`);
   }
 
-  // 4. AI 场景联想：卖点发散 + 情绪理念（直接调核心库，HTTP 层逻辑与 analyze 一致）
-  console.log('\n========== 4. AI 场景联想（卖点发散）==========');
-  const scenes = await suggestScenes(structure, {});
-  for (const s of scenes) {
-    console.log(`  「${s.name}」卖点：${s.sellingPoint} ｜ 情绪：${s.emotion}`);
-    console.log(`    画面：${s.scene}`);
+  // 4. 广告制作 Agent：产出 Listing 视觉策划案（直接调核心库，HTTP 层逻辑与 analyze 一致）
+  console.log('\n========== 4. 广告拍摄策划案（Creative Brief）==========');
+  const brief = await produceCreativeBrief(structure, {});
+  console.log(`  目标人群：${brief.audience}`);
+  console.log(`  核心卖点：${brief.coreSellingPoint}`);
+  console.log(`  传播钩子：${brief.hook}`);
+  for (const s of brief.shots) {
+    console.log(`  [${s.role}]「${s.name}」卖点：${s.sellingPoint} ｜ 情绪：${s.emotion}`);
+    console.log(`    构图：${s.composition}`);
   }
-  if (scenes.length === 0) throw new Error('场景联想为空');
-  if (scenes.some((s) => !s.sellingPoint || !s.emotion)) throw new Error('场景缺少卖点/情绪字段');
+  if (brief.shots.length === 0) throw new Error('拍摄清单为空');
+  if (brief.shots.some((s) => !s.sellingPoint || !s.emotion || !s.composition)) {
+    throw new Error('镜头缺少卖点/情绪/构图字段');
+  }
 
-  // 5. 场景化 prompt + 图生图（参考图 = 上传图的公网 URL，复刻用户真实链路）
-  console.log('\n========== 5. 场景图生图（4K 无文字，上传图回源）==========');
-  const prompts = buildScenePrompts(structure, scenes);
+  // 5. 拍摄清单 prompt + 图生图（参考图 = 上传图的公网 URL，复刻用户真实链路；冒烟只拍前 3 个镜头控时）
+  console.log('\n========== 5. 广告主图生成（4K 无文字，上传图回源）==========');
+  const smokeBrief = { ...brief, shots: brief.shots.slice(0, 3) };
+  const prompts = buildShotPrompts(structure, smokeBrief);
   for (const p of prompts) console.log(`  [${p.variant}] ${p.prompt.split('\n')[0]}`);
-  const results: RemixResult[] = await remixImage(publicUrl, structure, scenes, undefined, {});
+  const results: RemixResult[] = await remixImage(publicUrl, structure, smokeBrief, undefined, {});
   for (const r of results) console.log(`  [${r.variant}] sceneId=${r.sceneId ?? '—'} ${r.url.slice(0, 80)}...`);
   if (results.some((r) => !r.sceneId)) throw new Error('生成结果缺少 sceneId 回传');
 
-  // 6. 多角度衍生：以第一张场景图为参考，生成不同机位（冒烟只跑 2 个视角控时）
+  // 6. 多角度衍生：以第一张镜头图为参考，生成不同机位（冒烟只跑 2 个视角控时）
   console.log('\n========== 6. 多角度衍生（微距特写 + 俯拍陈列）==========');
   const first = results[0];
-  const firstScene = scenes.find((s) => s.id === first.sceneId);
-  if (!first || !firstScene) throw new Error('场景结果与场景数据无法关联');
-  const anglePrompts = buildAnglePrompts(firstScene, structure.productName);
+  const firstShot = brief.shots.find((s) => s.id === first.sceneId);
+  if (!first || !firstShot) throw new Error('生成结果与拍摄清单无法关联');
+  const anglePrompts = buildAnglePrompts(firstShot, structure.productName);
   console.log(`  预设视角：${anglePrompts.map((a) => a.variant).join(' / ')}`);
   const angleResults = await generateImages(first.url, anglePrompts.slice(0, 2), {});
   for (const r of angleResults) console.log(`  [${r.variant}] ${r.url.slice(0, 80)}...`);

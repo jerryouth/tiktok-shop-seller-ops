@@ -1,8 +1,8 @@
-// 多角度衍生：以选中场景已生成的图为参考，生成不同视角/构图的同场景主图
+// 多角度衍生：以选中镜头已生成的图为参考，生成不同视角/构图的同场景主图
 import { NextRequest, NextResponse } from 'next/server';
 import { HeaderUtils } from 'coze-coding-dev-sdk';
 import { assertImageStudioReady, remixAngles } from '@/lib/image-studio';
-import type { SceneSuggestion } from '@/lib/image-types';
+import type { Shot } from '@/lib/image-types';
 
 export const maxDuration = 300;
 
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = (await request.json()) as {
       image?: string;
-      scene?: SceneSuggestion;
+      shot?: Shot;
       productName?: string;
       extra?: string;
     };
@@ -29,14 +29,14 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-    if (!body.scene || typeof body.scene.scene !== 'string' || !body.scene.scene.trim()) {
-      return NextResponse.json({ error: '缺少有效的场景数据 scene' }, { status: 400 });
+    if (!body.shot || typeof body.shot.scene !== 'string' || !body.shot.scene.trim()) {
+      return NextResponse.json({ error: '缺少有效的镜头数据 shot' }, { status: 400 });
     }
 
     const headers = HeaderUtils.extractForwardHeaders(request.headers);
     const images = await remixAngles(
       body.image,
-      body.scene,
+      body.shot,
       body.productName ?? '产品',
       body.extra,
       headers,
