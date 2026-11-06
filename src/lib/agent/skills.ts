@@ -13,6 +13,7 @@ import {
 } from '@/lib/types';
 import { computeUnitEconomics } from '@/lib/unit-economics';
 import { getUpcomingEvents } from './sources/calendar';
+import { isSourcingConfigured, searchSourcing } from './sources/sourcing';
 import { fetchTrendSignals } from './sources/trends';
 import type { Skill, SkillContext } from './types';
 
@@ -329,6 +330,52 @@ const getSeasonalCalendarSkill: Skill = {
   },
 };
 
+const searchSourcingSkill: Skill = {
+  name: 'searchSourcing',
+  description: '检索1688货源（价格/起订量/供应商/回头率/直达链接），推荐落地前必查',
+  argsDoc: '{ keyword: 中文找货关键词（从泛到精，如"宠物自洁梳 一键除毛"）, limit?: 条数(默认5) }',
+  async run(args) {
+    const keyword = asString(args.keyword);
+    if (!keyword) {
+      return { data: { 错误: '缺少 keyword 参数' }, summary: '参数缺失' };
+    }
+    const limit = Math.min(10, Math.max(1, asNumber(args.limit) ?? 5));
+    const result = await searchSourcing(keyword, limit);
+    if (result.offers.length === 0) {
+      return {
+        data: {
+          已配置接口: isSourcingConfigured(),
+          搜索词: keyword,
+          直达链接: result.searchUrl,
+          货源: [],
+        },
+        summary: isSourcingConfigured()
+          ? '1688 未检索到货源，换词重试'
+          : '接口未配置，返回直达搜索链接',
+      };
+    }
+    const lowest = Math.min(...result.offers.map((o) => o.price));
+    return {
+      data: {
+        已配置接口: true,
+        搜索词: keyword,
+        直达链接: result.searchUrl,
+        货源: result.offers.map((o) => ({
+          标题: o.title,
+          单价: `¥${o.price}`,
+          起订量: o.moq,
+          供应商: o.supplier,
+          产业带: o.location,
+          成交: o.sales,
+          回头率: o.repurchaseRate,
+          链接: o.url,
+        })),
+      },
+      summary: `${result.offers.length} 个货源 · 最低 ¥${lowest}`,
+    };
+  },
+};
+
 /** Skill 注册表：新增工具只需在此登记，提示词文档自动同步 */
 const registry = new Map<string, Skill>(
   [
@@ -340,6 +387,7 @@ const registry = new Map<string, Skill>(
     getHotTrendsSkill,
     calcUnitEconomicsSkill,
     getSeasonalCalendarSkill,
+    searchSourcingSkill,
   ].map((s) => [s.name, s]),
 );
 

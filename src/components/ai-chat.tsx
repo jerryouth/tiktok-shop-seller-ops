@@ -17,6 +17,7 @@ import {
   Globe,
   Calculator,
   CalendarDays,
+  Factory,
   Check,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -57,16 +58,34 @@ const SKILL_ICONS: Record<string, typeof Database> = {
   getHotTrends: Globe,
   calcUnitEconomics: Calculator,
   getSeasonalCalendar: CalendarDays,
+  searchSourcing: Factory,
 };
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 function formatContent(text: string): string {
+  const stripped = text
+    // 安全网：剥除可能泄漏的工具协议标记
+    .replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, '')
+    .replace(/<tool_result[\s\S]*?(<\/tool_result>|$)/g, '');
   return (
-    text
-      // 安全网：剥除可能泄漏的工具协议标记
-      .replace(/<tool_call>[\s\S]*?(<\/tool_call>|$)/g, '')
-      .replace(/<tool_result[\s\S]*?(<\/tool_result>|$)/g, '')
+    escapeHtml(stripped)
       .replace(/\n/g, '<br/>')
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      // 链接可点击：支持 Markdown [文本](url) 与裸 URL 两种形态（单趟扫描，避免二次匹配 href 内的 URL）
+      .replace(
+        /\[([^\]]*)\]\((https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'+,;=%]+)\)|(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'+,;=%]+)/g,
+        (_m, text: string, mdUrl: string | undefined, bareUrl: string | undefined) => {
+          const url = mdUrl ?? bareUrl ?? '';
+          const label = text || url;
+          return `<a href="${url}" target="_blank" rel="noopener noreferrer" class="break-all text-[#00B8B0] underline underline-offset-2 hover:text-[#009b94]">${label}</a>`;
+        },
+      )
   );
 }
 
