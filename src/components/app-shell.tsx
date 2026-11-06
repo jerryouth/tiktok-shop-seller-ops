@@ -6,6 +6,7 @@ import { useState } from 'react';
 import {
   BarChart3,
   Compass,
+  Images,
   LayoutDashboard,
   Menu,
   PackageSearch,
@@ -19,6 +20,7 @@ import { AiChat } from '@/components/ai-chat';
 const NAV_ITEMS = [
   { href: '/', label: '市场趋势看板', icon: LayoutDashboard },
   { href: '/products', label: '选品库', icon: PackageSearch },
+  { href: '/image-studio', label: '主图工作台', icon: Images },
 ];
 
 function NavLinks({ onNavigate }: { onNavigate?: () => void }) {
