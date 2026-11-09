@@ -12,9 +12,12 @@ import {
   Flame,
   Globe,
   Hash,
+  Lightbulb,
   Minus,
   RefreshCw,
+  Rocket,
   Search,
+  Sparkles,
   TrendingDown,
   TrendingUp,
 } from 'lucide-react';
@@ -22,7 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EChart } from '@/components/echart';
 import { cn } from '@/lib/utils';
-import type { TrendsDashboardPayload } from '@/lib/trend-types';
+import type { TrendsDashboardPayload, TrendInsightsPayload, TrendOpportunity } from '@/lib/trend-types';
 import type { GoogleTrendInsight, TikTokHashtagTrend } from '@/lib/agent/sources/apify';
 import type { UpcomingEvent } from '@/lib/agent/sources/calendar';
 
@@ -52,6 +55,110 @@ function DirectionIcon({ direction, className }: { direction: string; className?
   if (/上升|up|rising/i.test(direction)) return <TrendingUp className={className} />;
   if (/下降|down|falling/i.test(direction)) return <TrendingDown className={className} />;
   return <Minus className={className} />;
+}
+
+/** 商机分配色：≥70 洋红「强商机」/ ≥55 青「可关注」/ ≥40 琥珀「观察」/ 其余灰 */
+function scoreBadgeClass(score: number): string {
+  if (score >= 70) return 'bg-[#fe2c55]/10 text-[#fe2c55]';
+  if (score >= 55) return 'bg-[#00b8b0]/10 text-[#00b8b0]';
+  if (score >= 40) return 'bg-amber-500/10 text-amber-600';
+  return 'bg-zinc-100 text-zinc-400';
+}
+
+const VERDICT_LABEL: Record<string, string> = {
+  strong: '强商机',
+  follow: '可关注',
+  watch: '观察',
+  avoid: '回避',
+};
+
+/** 选品机会卡片 */
+function OpportunityCard({ opp, rank }: { opp: TrendOpportunity; rank: number }) {
+  return (
+    <div className="flex flex-col rounded-xl border border-zinc-200 bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-900 text-[11px] font-semibold text-white">
+            {rank}
+          </span>
+          <h3 className="text-sm font-semibold text-zinc-900">{opp.title}</h3>
+        </div>
+        <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums', scoreBadgeClass(opp.demandScore))}>
+          需求 {opp.demandScore}
+        </span>
+      </div>
+      {/* 证据链：该机会挂在哪些真实趋势上 */}
+      <div className="mt-2 flex flex-wrap gap-1">
+        {opp.trendBasis.map((t) => (
+          <span key={t} className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-medium text-zinc-500">
+            #{t.replace(/^#/, '')}
+          </span>
+        ))}
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2 border-y border-zinc-100 py-2 text-[11px]">
+        <div>
+          <p className="text-zinc-400">建议定价</p>
+          <p className="mt-0.5 font-medium tabular-nums text-zinc-800">{opp.priceBand || '—'}</p>
+        </div>
+        <div>
+          <p className="text-zinc-400">关联节点</p>
+          <p className="mt-0.5 font-medium text-zinc-800">
+            {opp.eventName ? `${opp.eventName} · ${opp.daysUntil}天` : '—'}
+          </p>
+        </div>
+        <div>
+          <p className="text-zinc-400">目标人群</p>
+          <p className="mt-0.5 truncate font-medium text-zinc-800" title={opp.audience}>
+            {opp.audience || '—'}
+          </p>
+        </div>
+      </div>
+      {/* 可落地商品点子 */}
+      <ul className="mt-3 space-y-2">
+        {opp.products.map((p) => (
+          <li key={p.name} className="rounded-lg bg-zinc-50 px-2.5 py-2">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-zinc-800">{p.name}</p>
+              <span className="shrink-0 text-[10px] tabular-nums text-zinc-400">成本 {p.estCost}</span>
+            </div>
+            {p.sellingPoint && <p className="mt-0.5 text-[11px] text-zinc-500">{p.sellingPoint}</p>}
+            {p.keyword1688 && (
+              <a
+                href={`https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(p.keyword1688)}`}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-1 inline-flex items-center gap-1 rounded bg-[#00b8b0]/10 px-1.5 py-0.5 text-[10px] font-medium text-[#00b8b0] hover:bg-[#00b8b0]/20"
+              >
+                1688 找货：{p.keyword1688}
+                <ExternalLink className="h-2.5 w-2.5" />
+              </a>
+            )}
+          </li>
+        ))}
+      </ul>
+      {opp.window && (
+        <p className="mt-3 flex items-start gap-1.5 text-[11px] text-zinc-500">
+          <Clock className="mt-0.5 h-3 w-3 shrink-0 text-zinc-400" />
+          {opp.window}
+        </p>
+      )}
+      {opp.risks.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {opp.risks.map((r) => (
+            <span key={r} className="rounded bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-600">
+              {r}
+            </span>
+          ))}
+        </div>
+      )}
+      {opp.action && (
+        <p className="mt-auto flex items-start gap-1.5 border-t border-zinc-100 pt-2.5 text-[11px] font-medium text-[#00b8b0]">
+          <Rocket className="mt-0.5 h-3 w-3 shrink-0" />
+          {opp.action}
+        </p>
+      )}
+    </div>
+  );
 }
 
 function StatCard({
@@ -89,6 +196,8 @@ export default function TrendsDashboardPage() {
   const [error, setError] = useState('');
   const [termsInput, setTermsInput] = useState('');
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [insights, setInsights] = useState<TrendInsightsPayload | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
 
   const fetchTrends = useCallback(
     async (opts?: { refresh?: boolean; terms?: string[] }): Promise<TrendsDashboardPayload> => {
@@ -102,6 +211,19 @@ export default function TrendsDashboardPage() {
     [],
   );
 
+  /** 拉取选品机会洞察（LLM 分析，不阻塞主看板渲染） */
+  const fetchInsights = useCallback(async (refresh = false) => {
+    setInsightsLoading(true);
+    try {
+      const res = await fetch(`/api/trends/insights${refresh ? '?refresh=1' : ''}`);
+      if (res.ok) setInsights((await res.json()) as TrendInsightsPayload);
+    } catch {
+      // 洞察失败不影响看板基础数据
+    } finally {
+      setInsightsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     fetchTrends()
@@ -109,6 +231,7 @@ export default function TrendsDashboardPage() {
         if (cancelled) return;
         setData(d);
         setTermsInput(d.googleTerms.join(', '));
+        if (d.configured && d.tiktok) void fetchInsights();
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : '趋势数据加载失败');
@@ -119,7 +242,7 @@ export default function TrendsDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [fetchTrends]);
+  }, [fetchTrends, fetchInsights]);
 
   const refreshAll = async () => {
     setLoading(true);
@@ -128,6 +251,7 @@ export default function TrendsDashboardPage() {
       const d = await fetchTrends({ refresh: true });
       setData(d);
       setTermsInput(d.googleTerms.join(', '));
+      if (d.configured && d.tiktok) void fetchInsights(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : '刷新失败');
     } finally {
@@ -169,6 +293,13 @@ export default function TrendsDashboardPage() {
     [tiktok],
   );
   const nextEvent: UpcomingEvent | undefined = data?.calendar[0];
+
+  /** 商机分查找表（话题 → 分数/档位），洞察加载后回填热榜表格 */
+  const scoreMap = useMemo(() => {
+    const m = new Map<string, { score: number; verdict: string }>();
+    insights?.scoredTrends.forEach((t) => m.set(t.hashtag, { score: t.score, verdict: t.verdict }));
+    return m;
+  }, [insights]);
 
   const industryBarOption = useMemo(() => {
     if (!tiktok || tiktok.industryAgg.length === 0) return null;
@@ -367,6 +498,65 @@ export default function TrendsDashboardPage() {
             />
           </div>
 
+          {/* 选品机会洞察（趋势 → 电商结论） */}
+          {data.configured && (
+            <Card className="rounded-xl border-zinc-200 shadow-none">
+              <CardHeader className="pb-2">
+                <div className="flex items-center justify-between">
+                  <CardTitle className="flex items-center gap-2 text-[15px] font-semibold">
+                    <Sparkles className="h-4 w-4 text-[#fe2c55]" />
+                    选品机会洞察
+                    <span className="text-[11px] font-normal text-zinc-400">商机分量化 × AI 趋势推导</span>
+                  </CardTitle>
+                  {insights && (
+                    <button
+                      onClick={() => void fetchInsights(true)}
+                      disabled={insightsLoading}
+                      className="flex items-center gap-1 text-[11px] text-zinc-400 transition-colors hover:text-[#00b8b0] disabled:opacity-50"
+                    >
+                      <RefreshCw className={cn('h-3 w-3', insightsLoading && 'animate-spin')} />
+                      重新分析
+                    </button>
+                  )}
+                </div>
+              </CardHeader>
+              <CardContent className="p-4 pt-1">
+                {insightsLoading && !insights ? (
+                  <div className="space-y-3">
+                    <p className="flex items-center gap-2 text-xs text-zinc-400">
+                      <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#fe2c55]" />
+                      AI 正在把趋势信号推导成选品机会，约需 15-40 秒…
+                    </p>
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                      {[0, 1, 2].map((i) => (
+                        <Skeleton key={i} className="h-56 rounded-xl" />
+                      ))}
+                    </div>
+                  </div>
+                ) : insights && insights.opportunities.length > 0 ? (
+                  <div className={cn(insightsLoading && 'opacity-60 transition-opacity')}>
+                    {insights.marketSummary && (
+                      <p className="mb-3 flex items-start gap-1.5 rounded-lg bg-zinc-50 px-3 py-2 text-xs leading-relaxed text-zinc-600">
+                        <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                        {insights.marketSummary}
+                      </p>
+                    )}
+                    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                      {insights.opportunities.map((opp, i) => (
+                        <OpportunityCard key={opp.title} opp={opp} rank={i + 1} />
+                      ))}
+                    </div>
+                  </div>
+                ) : insights && !insights.aiGenerated ? (
+                  <p className="flex items-center gap-2 text-xs text-amber-600">
+                    <AlertTriangle className="h-3.5 w-3.5" />
+                    AI 洞察暂时不可用，可先参考热榜中的商机分列（规则层量化结果）。
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+          )}
+
           {/* 热榜 + 行业分布 + 飙升榜 */}
           <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
             {/* TikTok 热榜 */}
@@ -389,6 +579,7 @@ export default function TrendsDashboardPage() {
                           <th className="px-2 py-2 text-right font-medium">发帖量</th>
                           <th className="px-2 py-2 text-right font-medium">动能</th>
                           <th className="px-2 py-2 font-medium">阶段</th>
+                          <th className="px-2 py-2 text-right font-medium">商机分</th>
                           <th className="px-2 py-2 font-medium">行业</th>
                         </tr>
                       </thead>
@@ -430,6 +621,20 @@ export default function TrendsDashboardPage() {
                                   {h.trendStage}
                                 </span>
                               )}
+                            </td>
+                            <td className="px-2 py-2.5 text-right">
+                              {(() => {
+                                const s = scoreMap.get(h.hashtag);
+                                if (!s) return <span className="text-[11px] text-zinc-300">…</span>;
+                                return (
+                                  <span
+                                    title={`${VERDICT_LABEL[s.verdict]}：规模/动能/互动/电商相关度 × 阶段系数 + Google印证`}
+                                    className={cn('rounded-full px-2 py-0.5 text-[11px] font-semibold tabular-nums', scoreBadgeClass(s.score))}
+                                  >
+                                    {s.score}
+                                  </span>
+                                );
+                              })()}
                             </td>
                             <td className="max-w-[140px] truncate px-2 py-2.5 text-[11px] text-zinc-400">
                               {h.industries.slice(0, 2).join(' / ')}

@@ -54,6 +54,38 @@ async function main() {
   await resp2.json();
   console.log(`\n缓存命中验证：第二次请求耗时 ${Date.now() - t1}ms（应 <1000ms）`);
 
+  // 选品机会洞察（规则层商机分 + LLM 推导，复用趋势缓存）
+  console.log('\n请求 /api/trends/insights（LLM 分析，约 15-40s）…');
+  const t2 = Date.now();
+  const resp3 = await fetch(`${BASE}/api/trends/insights`, { signal: AbortSignal.timeout(240_000) });
+  if (!resp3.ok) throw new Error(`insights HTTP ${resp3.status}`);
+  const ins = (await resp3.json()) as {
+    aiGenerated: boolean;
+    marketSummary: string;
+    opportunities: {
+      title: string;
+      demandScore: number;
+      trendBasis: string[];
+      priceBand: string;
+      eventName: string;
+      daysUntil: number;
+      products: { name: string; keyword1688: string; estCost: string }[];
+      risks: string[];
+    }[];
+    scoredTrends: { hashtag: string; score: number; verdict: string }[];
+    errors: string[];
+  };
+  console.log(`耗时 ${((Date.now() - t2) / 1000).toFixed(0)}s · aiGenerated=${ins.aiGenerated} · errors=${ins.errors.length}`);
+  console.log('\n== 商机分 TOP5（规则层） ==');
+  ins.scoredTrends.slice(0, 5).forEach((t) => console.log(`#${t.hashtag} · ${t.score}分 · ${t.verdict}`));
+  if (ins.marketSummary) console.log('\n== 大盘风向 ==\n' + ins.marketSummary);
+  console.log('\n== 选品机会 ==');
+  ins.opportunities.forEach((o) => {
+    console.log(`\n[${o.demandScore}分] ${o.title} | 依据:${o.trendBasis.join(',')} | ${o.priceBand} | ${o.eventName} ${o.daysUntil}天`);
+    o.products.forEach((p) => console.log(`  · ${p.name}（1688: ${p.keyword1688}，成本 ${p.estCost}）`));
+    if (o.risks.length) console.log(`  风险: ${o.risks.join('；')}`);
+  });
+
   console.log('\n✅ 趋势看板接口验证通过');
 }
 
