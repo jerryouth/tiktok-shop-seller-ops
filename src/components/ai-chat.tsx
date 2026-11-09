@@ -6,7 +6,6 @@ import type { EChartsOption } from 'echarts';
 import {
   Bot,
   Send,
-  X,
   Sparkles,
   Loader2,
   RotateCcw,
@@ -24,9 +23,11 @@ import {
   Package,
   Search,
   ArrowUpRight,
+  Square,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EChart } from '@/components/echart';
 import type { ProductWithScore } from '@/lib/types';
 import { build1688SearchUrl } from '@/lib/url1688';
@@ -44,6 +45,8 @@ interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   streaming?: boolean;
+  /** 用户主动停止生成（保留部分内容） */
+  stopped?: boolean;
   steps?: SkillStep[];
 }
 
@@ -66,6 +69,8 @@ const SKILL_ICONS: Record<string, typeof Database> = {
   calcUnitEconomics: Calculator,
   getSeasonalCalendar: CalendarDays,
   searchSourcing: Factory,
+  getSourcingDetail: PackageSearch,
+  searchSourcingByImage: Search,
   getGoogleTrends: TrendingUp,
 };
 
@@ -741,31 +746,14 @@ function DirectionCard({ item: it }: { item: RecommendItem }) {
   );
 }
 
-/** 将消息内容解析为有序块渲染：文本 / 内联商品 / 图表 / 推荐卡片 / 流式占位 */
-function MessageContent({
-  content,
-  products,
-  streaming,
+/** 渲染一组内容块（文本 / 内联商品 / 图表 / 推荐卡片 / 流式占位） */
+function BlockList({
+  blocks,
+  lookup,
 }: {
-  content: string;
-  products: ProductWithScore[];
-  streaming?: boolean;
+  blocks: ContentBlock[];
+  lookup: (id: string) => ProductWithScore | undefined;
 }) {
-  const blocks = useMemo(() => parseBlocks(content, streaming), [content, streaming]);
-  const wantedIds = useMemo(() => {
-    const set = new Set<string>();
-    for (const b of blocks) {
-      if (b.kind === 'product') set.add(b.id);
-      else if (b.kind === 'cards') for (const it of b.items) if (it.id) set.add(it.id);
-    }
-    return [...set];
-  }, [blocks]);
-  const allProducts = useExtraProducts(products, wantedIds);
-  const lookup = useMemo(() => {
-    const map = new Map(allProducts.map((p) => [p.id, p]));
-    return (id: string) => map.get(id);
-  }, [allProducts]);
-
   return (
     <div className="space-y-2">
       {blocks.map((b, i) => {
@@ -798,10 +786,162 @@ function MessageContent({
             );
         }
       })}
-      {streaming && (
-        <span className="inline-block h-4 w-1.5 animate-pulse rounded-sm bg-[#00b8b0]" />
-      )}
     </div>
+  );
+}
+
+/**
+ * 助手消息主体：
+ * - 简单回复（无卡片/图表/工具轨迹）→ 纯文本流式渲染
+ * - 富内容回复 → Tab 化：「选品方案」（推荐卡 + 正文）/「图表」（全部图表集中）/「佐证过程」（工具调用轨迹）
+ */
+function AssistantMessageBody({
+  msg,
+  products,
+}: {
+  msg: ChatMessage;
+  products: ProductWithScore[];
+}) {
+  const blocks = useMemo(() => parseBlocks(msg.content, msg.streaming), [msg.content, msg.streaming]);
+  const wantedIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const b of blocks) {
+      if (b.kind === 'product') set.add(b.id);
+      else if (b.kind === 'cards') for (const it of b.items) if (it.id) set.add(it.id);
+    }
+    return [...set];
+  }, [blocks]);
+  const allProducts = useExtraProducts(products, wantedIds);
+  const lookup = useMemo(() => {
+    const map = new Map(allProducts.map((p) => [p.id, p]));
+    return (id: string) => map.get(id);
+  }, [allProducts]);
+
+  const cardBlocks = blocks.filter((b) => b.kind === 'cards');
+  const chartBlocks = blocks.filter((b) => b.kind === 'chart');
+  const textBlocks = blocks.filter(
+    (b) => b.kind === 'text' || b.kind === 'product' || b.kind === 'pending',
+  );
+  const steps = msg.steps ?? [];
+  const rich = cardBlocks.length > 0 || chartBlocks.length > 0 || steps.length > 0;
+
+  // 简单回复：纯文本
+  if (!rich) {
+    return (
+      <div>
+        {msg.content ? (
+          <BlockList blocks={textBlocks} lookup={lookup} />
+        ) : (
+          msg.streaming && (
+            <span className="flex items-center gap-1.5 text-[12px] text-zinc-400">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              老K 正在思考...
+            </span>
+          )
+        )}
+        {msg.streaming && msg.content && (
+          <span className="inline-block h-4 w-1.5 animate-pulse rounded-sm bg-[#00b8b0]" />
+        )}
+        {msg.stopped && <StoppedMarker />}
+      </div>
+    );
+  }
+
+  return (
+    <Tabs defaultValue="plan" className="w-full">
+      <TabsList className="h-8 w-full justify-start rounded-lg bg-zinc-100 p-0.5">
+        <TabsTrigger
+          value="plan"
+          className="h-7 rounded-md px-2.5 text-[11.5px] data-[state=active]:bg-white data-[state=active]:shadow-sm"
+        >
+          <Sparkles className="mr-1 h-3 w-3" />
+          选品方案
+        </TabsTrigger>
+        <TabsTrigger
+          value="charts"
+          className="h-7 rounded-md px-2.5 text-[11.5px] data-[state=active]:bg-white data-[state=active]:shadow-sm"
+        >
+          <BarChart3 className="mr-1 h-3 w-3" />
+          图表{chartBlocks.length > 0 && ` ${chartBlocks.length}`}
+        </TabsTrigger>
+        <TabsTrigger
+          value="evidence"
+          className="h-7 rounded-md px-2.5 text-[11.5px] data-[state=active]:bg-white data-[state=active]:shadow-sm"
+        >
+          <Database className="mr-1 h-3 w-3" />
+          佐证过程{steps.length > 0 && ` ${steps.length}`}
+        </TabsTrigger>
+      </TabsList>
+
+      {/* 选品方案：推荐卡片置顶 + 详细分析正文 */}
+      <TabsContent value="plan" className="mt-2.5 space-y-2.5">
+        {cardBlocks.length > 0 && (
+          <div>
+            <p className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-zinc-500">
+              <Package className="h-3 w-3 text-[#fe2c55]" />
+              推荐方向（{cardBlocks.reduce((n, b) => n + (b.kind === 'cards' ? b.items.length : 0), 0)}）
+            </p>
+            <BlockList blocks={cardBlocks} lookup={lookup} />
+          </div>
+        )}
+        {textBlocks.length > 0 && (
+          <div>
+            {cardBlocks.length > 0 && (
+              <p className="mb-1.5 border-t border-zinc-100 pt-2 text-[11px] font-semibold text-zinc-500">
+                详细分析
+              </p>
+            )}
+            <BlockList blocks={textBlocks} lookup={lookup} />
+          </div>
+        )}
+        {msg.streaming && (
+          <span className="flex items-center gap-1.5 text-[12px] text-zinc-400">
+            <Loader2 className="h-3 w-3 animate-spin" />
+            {msg.content ? '' : '老K 正在思考...'}
+            {msg.content && (
+              <span className="inline-block h-4 w-1.5 animate-pulse rounded-sm bg-[#00b8b0]" />
+            )}
+          </span>
+        )}
+        {msg.stopped && <StoppedMarker />}
+      </TabsContent>
+
+      {/* 图表：集中展示全部图表 */}
+      <TabsContent value="charts" className="mt-2.5">
+        {chartBlocks.length > 0 ? (
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            {chartBlocks.map((b, i) =>
+              b.kind === 'chart' ? <ChatChart key={i} spec={b.spec} /> : null,
+            )}
+          </div>
+        ) : (
+          <p className="rounded-lg border border-dashed border-zinc-200 px-3 py-4 text-center text-[11.5px] text-zinc-400">
+            {msg.streaming ? '图表生成中…' : '本次回答没有图表'}
+          </p>
+        )}
+      </TabsContent>
+
+      {/* 佐证过程：工具调用轨迹（数据出处） */}
+      <TabsContent value="evidence" className="mt-2.5">
+        {steps.length > 0 ? (
+          <SkillSteps steps={steps} />
+        ) : (
+          <p className="rounded-lg border border-dashed border-zinc-200 px-3 py-4 text-center text-[11.5px] text-zinc-400">
+            {msg.streaming ? '等待工具调用…' : '本次回答未调用工具'}
+          </p>
+        )}
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+/** 停止生成标记 */
+function StoppedMarker() {
+  return (
+    <p className="mt-2 flex items-center gap-1 border-t border-zinc-100 pt-1.5 text-[10.5px] text-zinc-400">
+      <Square className="h-2.5 w-2.5 fill-current" />
+      已停止生成，以上内容不完整
+    </p>
   );
 }
 
@@ -855,8 +995,7 @@ function InlineProductCard({ product }: { product: ProductWithScore }) {
   );
 }
 
-export function AiChat() {
-  const [open, setOpen] = useState(false);
+export function AiChatPage() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -865,25 +1004,21 @@ export function AiChat() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // 打开时加载商品数据（用于渲染商品卡片）
+  // 挂载时加载商品数据（兼容旧协议 [PRODUCT:id] 与库内 ID 卡片渲染）
   useEffect(() => {
-    if (open && products.length === 0) {
-      fetch('/api/products?pageSize=50&sortBy=score&sortOrder=desc')
-        .then((r) => r.json())
-        .then((data) => setProducts(data.items || []))
-        .catch(() => {});
-    }
-  }, [open, products.length]);
+    fetch('/api/products?pageSize=50&sortBy=score&sortOrder=desc')
+      .then((r) => r.json())
+      .then((data) => setProducts(data.items || []))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   useEffect(() => {
-    if (open) {
-      setTimeout(() => inputRef.current?.focus(), 300);
-    }
-  }, [open]);
+    inputRef.current?.focus();
+  }, []);
 
   const sendMessage = useCallback(
     async (text: string) => {
@@ -1006,7 +1141,23 @@ export function AiChat() {
           ),
         );
       } catch (error) {
-        if ((error as Error).name !== 'AbortError') {
+        if ((error as Error).name === 'AbortError') {
+          // 用户主动停止：保留已生成的部分内容
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantMsg.id
+                ? {
+                    ...m,
+                    streaming: false,
+                    stopped: true,
+                    steps: m.steps?.map((s) =>
+                      s.status === 'running' ? { ...s, status: 'done' as const } : s,
+                    ),
+                  }
+                : m,
+            ),
+          );
+        } else {
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantMsg.id
@@ -1026,6 +1177,10 @@ export function AiChat() {
     },
     [messages, isStreaming],
   );
+
+  const stopGenerating = useCallback(() => {
+    abortRef.current?.abort();
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1047,156 +1202,133 @@ export function AiChat() {
   };
 
   return (
-    <>
-      {/* 悬浮按钮 */}
-      {!open && (
-        <button
-          onClick={() => setOpen(true)}
-          className="fixed bottom-6 right-6 z-50 flex h-13 w-13 items-center justify-center rounded-2xl bg-[#00b8b0] text-white shadow-lg shadow-[#00b8b0]/25 transition-all duration-200 hover:scale-105 hover:shadow-xl hover:shadow-[#00b8b0]/30 active:scale-95"
-          aria-label="AI 选品助手"
-        >
-          <Bot className="h-6 w-6" />
-        </button>
-      )}
-
-      {/* 聊天面板 */}
-      {open && (
-        <div className="fixed inset-y-0 right-0 z-50 flex w-full flex-col border-l border-zinc-200 bg-[#fafbfc] shadow-2xl sm:w-[440px]">
-          {/* 头部 */}
-          <div className="flex items-center justify-between border-b border-zinc-200 bg-white px-4 py-3">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-[#00b8b0]/10">
-                <Sparkles className="h-4 w-4 text-[#00b8b0]" />
-              </span>
-              <div>
-                <p className="text-sm font-semibold text-zinc-900">老K · 选品总监</p>
-                <p className="text-[11px] text-zinc-400">Agent · 趋势 × 数据 × 利润测算</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-1">
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={resetChat}
-                title="清空对话"
-              >
-                <RotateCcw className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                onClick={() => setOpen(false)}
-                title="关闭"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            </div>
-          </div>
-
-          {/* 消息区域 */}
-          <div className="flex-1 overflow-y-auto px-4 py-4">
-            {messages.length === 0 && (
-              <div className="flex h-full flex-col items-center justify-center">
-                <span className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-[#00b8b0]/10">
-                  <Bot className="h-7 w-7 text-[#00b8b0]" />
-                </span>
-                <p className="mb-1.5 text-sm font-semibold text-zinc-900">
-                  老K · 顶级选品总监
-                </p>
-                <p className="mb-6 max-w-[280px] text-center text-xs leading-relaxed text-zinc-400">
-                  15 年跨境操盘手：懂数据、懂美国文化、懂 ROI
-                  和毛利。联网趋势 × 商品库 × 利润测算，直接给我你的选品问题
-                </p>
-                <div className="flex w-full max-w-[320px] flex-col gap-2">
-                  {QUICK_PROMPTS.map((prompt) => (
-                    <button
-                      key={prompt}
-                      onClick={() => sendMessage(prompt)}
-                      className="rounded-xl border border-zinc-200 bg-white px-3.5 py-2.5 text-left text-[13px] text-zinc-600 transition-colors hover:border-[#00b8b0]/30 hover:bg-[#00b8b0]/5 hover:text-zinc-900"
-                    >
-                      {prompt}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`mb-4 flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                {msg.role === 'assistant' && (
-                  <span className="mr-2 mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-[#00b8b0]/10">
-                    <Bot className="h-3.5 w-3.5 text-[#00b8b0]" />
-                  </span>
-                )}
-                <div
-                  className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 ${
-                    msg.role === 'user'
-                      ? 'bg-[#00b8b0] text-white'
-                      : 'bg-white border border-zinc-200'
-                  }`}
-                >
-                  {msg.role === 'user' ? (
-                    <p className="text-[13px] leading-relaxed">{msg.content}</p>
-                  ) : (
-                    <>
-                      {msg.steps && msg.steps.length > 0 && (
-                        <SkillSteps steps={msg.steps} />
-                      )}
-                      {msg.content ? (
-                        <MessageContent
-                          content={msg.content}
-                          products={products}
-                          streaming={msg.streaming}
-                        />
-                      ) : (
-                        msg.streaming &&
-                        (!msg.steps || msg.steps.length === 0) && (
-                          <span className="flex items-center gap-1.5 text-[12px] text-zinc-400">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Agent 正在思考...
-                          </span>
-                        )
-                      )}
-                    </>
-                  )}
-                </div>
-              </div>
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* 输入区域 */}
-          <div className="border-t border-zinc-200 bg-white p-3">
-            <form onSubmit={handleSubmit} className="flex items-end gap-2">
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="描述你的选品需求..."
-                rows={1}
-                className="max-h-24 min-h-[38px] flex-1 resize-none rounded-xl border border-zinc-200 bg-zinc-50 px-3 py-2 text-[13px] text-zinc-900 placeholder-zinc-400 outline-none focus:border-[#00b8b0]/50 focus:ring-1 focus:ring-[#00b8b0]/20"
-                disabled={isStreaming}
-              />
-              <Button
-                type="submit"
-                size="icon"
-                disabled={!input.trim() || isStreaming}
-                className="h-[38px] w-[38px] shrink-0 rounded-xl bg-[#00b8b0] hover:bg-[#00a3a0]"
-              >
-                {isStreaming ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Send className="h-4 w-4" />
-                )}
-              </Button>
-            </form>
+    <div className="flex h-full flex-col bg-[#fafbfc]">
+      {/* 页面头部 */}
+      <div className="flex items-center justify-between border-b border-zinc-200 bg-white px-5 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#00b8b0]/10">
+            <Sparkles className="h-4.5 w-4.5 text-[#00b8b0]" />
+          </span>
+          <div>
+            <h1 className="text-[15px] font-semibold text-zinc-900">AI 选品 · 老K</h1>
+            <p className="text-[11px] text-zinc-400">
+              顶级选品总监 Agent · 趋势 × 货源 × 利润测算
+            </p>
           </div>
         </div>
-      )}
-    </>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={resetChat}
+          disabled={messages.length === 0}
+          className="gap-1.5 text-xs"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          新对话
+        </Button>
+      </div>
+
+      {/* 消息区域 */}
+      <div className="flex-1 overflow-y-auto px-5 py-5">
+        <div className="mx-auto w-full max-w-3xl">
+          {messages.length === 0 && (
+            <div className="flex min-h-[60vh] flex-col items-center justify-center">
+              <span className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-[#00b8b0]/10">
+                <Bot className="h-8 w-8 text-[#00b8b0]" />
+              </span>
+              <p className="mb-1.5 text-base font-semibold text-zinc-900">
+                老K · 顶级选品总监
+              </p>
+              <p className="mb-8 max-w-[400px] text-center text-[13px] leading-relaxed text-zinc-400">
+                15 年跨境操盘手：懂数据、懂美国文化、懂 ROI
+                和毛利。联网趋势 × 实时货源 × 利润测算，直接给我你的选品问题
+              </p>
+              <div className="grid w-full max-w-[560px] gap-2 sm:grid-cols-2">
+                {QUICK_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    onClick={() => sendMessage(prompt)}
+                    className="rounded-xl border border-zinc-200 bg-white px-4 py-3 text-left text-[13px] text-zinc-600 transition-colors hover:border-[#00b8b0]/30 hover:bg-[#00b8b0]/5 hover:text-zinc-900"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {messages.map((msg) => (
+            <div
+              key={msg.id}
+              className={`mb-5 flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+            >
+              {msg.role === 'assistant' && (
+                <span className="mr-2.5 mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[#00b8b0]/10">
+                  <Bot className="h-3.5 w-3.5 text-[#00b8b0]" />
+                </span>
+              )}
+              <div
+                className={`rounded-2xl px-4 py-3 ${
+                  msg.role === 'user'
+                    ? 'max-w-[75%] bg-[#00b8b0] text-white'
+                    : 'max-w-[92%] flex-1 border border-zinc-200 bg-white'
+                }`}
+              >
+                {msg.role === 'user' ? (
+                  <p className="text-[13px] leading-relaxed">{msg.content}</p>
+                ) : (
+                  <AssistantMessageBody msg={msg} products={products} />
+                )}
+              </div>
+            </div>
+          ))}
+          <div ref={messagesEndRef} />
+        </div>
+      </div>
+
+      {/* 输入区域 */}
+      <div className="border-t border-zinc-200 bg-white px-5 py-3.5">
+        <form
+          onSubmit={handleSubmit}
+          className="mx-auto flex w-full max-w-3xl items-end gap-2"
+        >
+          <textarea
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              isStreaming ? '正在生成中，可先输入下一个问题…' : '描述你的选品需求…'
+            }
+            rows={1}
+            className="max-h-32 min-h-[42px] flex-1 resize-none rounded-xl border border-zinc-200 bg-zinc-50 px-3.5 py-2.5 text-[13px] text-zinc-900 placeholder-zinc-400 outline-none focus:border-[#00b8b0]/50 focus:ring-1 focus:ring-[#00b8b0]/20"
+          />
+          {isStreaming ? (
+            <Button
+              type="button"
+              onClick={stopGenerating}
+              title="停止生成"
+              className="h-[42px] shrink-0 gap-1.5 rounded-xl bg-[#FE2C55] px-4 text-[13px] hover:bg-[#e6254d]"
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+              停止
+            </Button>
+          ) : (
+            <Button
+              type="submit"
+              size="icon"
+              disabled={!input.trim()}
+              title="发送"
+              className="h-[42px] w-[42px] shrink-0 rounded-xl bg-[#00b8b0] hover:bg-[#00a3a0]"
+            >
+              <Send className="h-4 w-4" />
+            </Button>
+          )}
+        </form>
+        <p className="mx-auto mt-1.5 w-full max-w-3xl text-[10px] text-zinc-300">
+          Enter 发送 · Shift+Enter 换行 · 生成中可随时停止
+        </p>
+      </div>
+    </div>
   );
 }

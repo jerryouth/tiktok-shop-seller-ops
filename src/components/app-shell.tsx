@@ -11,15 +11,16 @@ import {
   LayoutDashboard,
   Menu,
   PackageSearch,
+  Sparkles,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Sheet, SheetContent, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
-import { AiChat } from '@/components/ai-chat';
 
 const NAV_ITEMS = [
   { href: '/', label: '市场趋势看板', icon: LayoutDashboard },
+  { href: '/chat', label: 'AI 选品', icon: Sparkles },
   { href: '/products', label: '选品库', icon: PackageSearch },
   { href: '/testing', label: '内容测试', icon: FlaskConical },
   { href: '/image-studio', label: '主图工作台', icon: Images },
@@ -90,6 +91,8 @@ function SidebarContent() {
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+  const isChatPage = pathname === '/chat';
 
   return (
     <div className="min-h-screen bg-[#f4f5f7]">
@@ -126,11 +129,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       </div>
 
       <main className="lg:pl-60">
-        <div className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
-          {children}
-        </div>
+        {isChatPage ? (
+          <div className="h-[calc(100vh-4rem)] lg:h-screen">{children}</div>
+        ) : (
+          <div className="mx-auto w-full max-w-[1400px] px-4 py-6 sm:px-6 lg:px-8">
+            {children}
+          </div>
+        )}
       </main>
-      <AiChat />
       <Toaster position="top-center" richColors />
     </div>
   );
