@@ -25,11 +25,13 @@ export async function GET(request: NextRequest) {
   const bundle = await getTrendsBundle({ refresh });
   const scoredTrends = bundle.tiktok ? scoreTrends(bundle.tiktok.hashtags, bundle.google) : [];
 
-  // 缓存键：榜单头部话题签名（榜单变了才重新调用 LLM）
-  const cacheKey = scoredTrends
-    .slice(0, 8)
-    .map((t) => `${t.hashtag}:${Math.round(t.momentumPct)}`)
-    .join('|');
+  // 缓存键：榜单头部话题签名（榜单变了才重新调用 LLM）；v2 = 证据链归一化修复
+  const cacheKey =
+    'v2:' +
+    scoredTrends
+      .slice(0, 8)
+      .map((t) => `${t.hashtag}:${Math.round(t.momentumPct)}`)
+      .join('|');
   const cached = g.__trendInsightsCache;
   if (!refresh && cached && cached.key === cacheKey && cached.expiresAt > Date.now()) {
     return NextResponse.json(cached.data);

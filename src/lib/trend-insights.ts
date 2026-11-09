@@ -74,7 +74,7 @@ function sanitizeProduct(raw: unknown): OpportunityProduct | null {
   };
 }
 
-function sanitizeOpportunity(raw: unknown, validHashtags: Set<string>): TrendOpportunity | null {
+function sanitizeOpportunity(raw: unknown, validTags: Set<string>): TrendOpportunity | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const r = raw as Record<string, unknown>;
   if (typeof r.title !== 'string' || !r.title.trim()) return null;
@@ -82,10 +82,11 @@ function sanitizeOpportunity(raw: unknown, validHashtags: Set<string>): TrendOpp
     .map(sanitizeProduct)
     .filter((p): p is OpportunityProduct => p !== null);
   if (products.length === 0) return null;
+  const normTag = (s: string) => s.replace(/^#/, '').trim().toLowerCase();
   return {
     title: r.title.trim(),
     // 只保留真实存在于榜单的话题引用，防止模型编造证据
-    trendBasis: toStringArray(r.trendBasis).filter((t) => validHashtags.has(t)),
+    trendBasis: toStringArray(r.trendBasis).filter((t) => validTags.has(normTag(t))),
     demandScore:
       typeof r.demandScore === 'number' && Number.isFinite(r.demandScore)
         ? Math.min(100, Math.max(0, Math.round(r.demandScore)))
@@ -143,13 +144,26 @@ export async function generateTrendInsights(
       { model: MODEL, temperature: 0.4 },
     );
     const parsed = extractJson(response.content);
-    const validHashtags = new Set(scoredTrends.map((t) => t.hashtag));
+    // 话题名校验做 # 前缀与大小写归一化，防止模型写法差异误删证据链
+    const normTag = (s: string) => s.replace(/^#/, '').trim().toLowerCase();
+    const validTags = new Set(scoredTrends.map((t) => normTag(t.hashtag)));
     const opportunities = (Array.isArray(parsed.opportunities) ? parsed.opportunities : [])
-      .map((o) => sanitizeOpportunity(o, validHashtags))
+      .map((o) => sanitizeOpportunity(o, validTags))
       .filter((o): o is TrendOpportunity => o !== null)
       .sort((a, b) => b.demandScore - a.demandScore)
       .slice(0, 5);
     if (opportunities.length === 0) return null;
+    // 节点倒计时以营销日历数据为准（模型可能凭印象估算天数）
+    for (const opp of opportunities) {
+      if (!opp.eventName) continue;
+      const hit = calendar.find(
+        (e) => e.name.includes(opp.eventName) || opp.eventName.includes(e.name),
+      );
+      if (hit) {
+        opp.eventName = hit.name;
+        opp.daysUntil = hit.daysUntil;
+      }
+    }
     return {
       marketSummary: typeof parsed.marketSummary === 'string' ? parsed.marketSummary : '',
       opportunities,

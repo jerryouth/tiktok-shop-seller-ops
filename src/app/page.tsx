@@ -103,7 +103,7 @@ function OpportunityCard({ opp, rank }: { opp: TrendOpportunity; rank: number })
         <div>
           <p className="text-zinc-400">关联节点</p>
           <p className="mt-0.5 font-medium text-zinc-800">
-            {opp.eventName ? `${opp.eventName} · ${opp.daysUntil}天` : '—'}
+            {opp.eventName ? `${opp.eventName}${opp.daysUntil > 0 ? ` · ${opp.daysUntil}天` : ''}` : '—'}
           </p>
         </div>
         <div>
