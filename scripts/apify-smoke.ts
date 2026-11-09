@@ -1,5 +1,17 @@
 // Apify 数据源直连冒烟：验证两个 Actor 真实返回（不经过 Next 服务）
 // 运行：pnpm tsx scripts/apify-smoke.ts
+import { readFileSync } from 'node:fs';
+
+// 独立脚本不经过 Next，手动加载 .env.local
+try {
+  for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+  }
+} catch {
+  // .env.local 不存在时忽略
+}
+
 import { fetchGoogleTrends, fetchTikTokHashtagTrends, isApifyConfigured } from '../src/lib/agent/sources/apify';
 
 async function main() {

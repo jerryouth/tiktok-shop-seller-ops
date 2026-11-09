@@ -1,5 +1,17 @@
 // Agent 端到端冒烟脚本：直接驱动 runAgent，验证 ReAct 工具调用循环（非 HTTP 层）
-// 用法：pnpm tsx scripts/agent-smoke.ts
+// 用法：pnpm tsx scripts/agent-smoke.ts [用例名关键词]
+import { readFileSync } from 'node:fs';
+
+// 独立脚本不经过 Next，手动加载 .env.local（APIFY_TOKEN 等）
+try {
+  for (const line of readFileSync('.env.local', 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2];
+  }
+} catch {
+  // .env.local 不存在时忽略
+}
+
 import { runAgent } from '../src/lib/agent/runner';
 import type { AgentEvent } from '../src/lib/agent/types';
 
