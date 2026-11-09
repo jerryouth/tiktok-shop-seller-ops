@@ -90,6 +90,70 @@ function formatInline(line: string): string {
 const SOURCE_ICON_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-top:2px;flex-shrink:0"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/></svg>';
 
+function isTableLine(line: string): boolean {
+  return /^\s*\|.*\|\s*$/.test(line);
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\s*\|[\s:|-]+\|\s*$/.test(line) && line.includes('-');
+}
+
+function parseTableRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\||\|$/g, '')
+    .split('|')
+    .map((c) => c.trim());
+}
+
+type ColAlign = 'left' | 'center' | 'right';
+
+/** 把连续 Markdown 表格行渲染为 HTML 表格，返回 html 与消耗到的下一行下标；非表格返回 null */
+function buildTable(lines: string[], start: number): { html: string; next: number } | null {
+  if (start + 1 >= lines.length) return null;
+  if (!isTableLine(lines[start]) || !isTableSeparator(lines[start + 1])) return null;
+
+  const headers = parseTableRow(lines[start]);
+  const aligns: ColAlign[] = parseTableRow(lines[start + 1]).map((seg) => {
+    const left = seg.startsWith(':');
+    const right = seg.endsWith(':');
+    if (left && right) return 'center';
+    if (right) return 'right';
+    return 'left';
+  });
+
+  let i = start + 2;
+  const rows: string[][] = [];
+  while (i < lines.length && isTableLine(lines[i]) && !isTableSeparator(lines[i])) {
+    rows.push(parseTableRow(lines[i]));
+    i++;
+  }
+  if (rows.length === 0) return null;
+
+  const alignOf = (idx: number): ColAlign => aligns[idx] ?? 'left';
+  const th = headers
+    .map(
+      (h, c) =>
+        `<th style="text-align:${alignOf(c)};padding:6px 8px;border-bottom:1px solid #e4e4e7;color:#71717a;font-weight:600;white-space:nowrap">${formatInline(h)}</th>`,
+    )
+    .join('');
+  const trs = rows
+    .map(
+      (row) =>
+        `<tr>${row
+          .map(
+            (cell, c) =>
+              `<td style="text-align:${alignOf(c)};padding:6px 8px;border-bottom:1px solid #f4f4f5;color:${c === 0 ? '#18181b;font-weight:500' : '#3f3f46'}">${formatInline(cell)}</td>`,
+          )
+          .join('')}</tr>`,
+    )
+    .join('');
+  return {
+    html: `<div style="overflow-x:auto;margin:8px 0;border:1px solid #f0f0f2;border-radius:10px"><table style="width:100%;border-collapse:collapse;font-size:11px;line-height:1.5"><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table></div>`,
+    next: i,
+  };
+}
+
 function formatContent(text: string): string {
   const stripped = text
     // 安全网：剥除可能泄漏的工具协议标记
@@ -97,17 +161,30 @@ function formatContent(text: string): string {
     .replace(/<tool_result[\s\S]*?(<\/tool_result>|$)/g, '');
   const lines = escapeHtml(stripped).split('\n');
   const out: string[] = [];
-  lines.forEach((line, idx) => {
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    // Markdown 表格 → HTML 表格（对比数据可读性）
+    if (isTableLine(line)) {
+      const table = buildTable(lines, i);
+      if (table) {
+        out.push(table.html);
+        i = table.next;
+        continue;
+      }
+    }
     // 「> 」开头的行渲染为数据来源脚注卡片
     if (/^&gt;\s?/.test(line)) {
       const body = formatInline(line.replace(/^&gt;\s?/, ''));
       out.push(
         `<div style="margin-top:6px;display:flex;align-items:flex-start;gap:6px;border-radius:8px;border:1px solid #f4f4f5;background:#fafafa;padding:6px 10px;font-size:10.5px;line-height:1.6;color:#a1a1aa">${SOURCE_ICON_SVG}<span>${body}</span></div>`,
       );
-      return;
+      i++;
+      continue;
     }
-    out.push(formatInline(line) + (idx === lines.length - 1 ? '' : '<br/>'));
-  });
+    out.push(formatInline(line) + (i === lines.length - 1 ? '' : '<br/>'));
+    i++;
+  }
   return out.join('');
 }
 
@@ -445,9 +522,10 @@ function ChatChart({ spec }: { spec: ChartSpec }) {
 
 const TAG_STYLES: Record<string, string> = {
   主推: 'bg-[#fe2c55] text-white',
-  备选: 'bg-[#00b8b0] text-white',
-  观察: 'bg-amber-500 text-white',
-  劝退: 'bg-zinc-400 text-white',
+  次推: 'bg-[#00b8b0] text-white',
+  备选: 'bg-[#00b8b0]/10 text-[#00b8b0]',
+  观察: 'bg-amber-500/10 text-amber-600',
+  劝退: 'bg-zinc-400/10 text-zinc-500',
 };
 
 /** <cards> 协议渲染：选品推荐卡片清单 */
