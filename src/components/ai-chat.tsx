@@ -21,6 +21,9 @@ import {
   Factory,
   TrendingUp,
   Check,
+  Package,
+  Search,
+  ArrowUpRight,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -44,12 +47,11 @@ interface ChatMessage {
 }
 
 const QUICK_PROMPTS = [
-  '联网看看 TikTok 最近什么在爆，结合库里商品给建议',
-  '帮我测算 P0001 的利润、ROI 和盈亏平衡广告成本',
-  '把库里评分 TOP3 的商品画雷达图对比，并给出推荐卡片',
+  '联网看看 TikTok 最近什么在爆，给我 3 个选品方向',
+  'Google 上搜索量在涨的方向有哪些？帮我筛 3 个品',
   '接下来有什么美国营销节点？该提前备什么品？',
-  '库里哪些商品毛利够打广告？帮我筛一遍',
-  '低竞争高利润的商品有哪些？',
+  '圣诞季有什么低成本高毛利的品？给出定价和 1688 找货',
+  '从趋势里找 3 个轻小件方向，测算利润和盈亏平衡广告成本',
 ];
 
 /** Skill 名称 → 图标 */
@@ -73,9 +75,10 @@ function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;');
 }
 
-/** 行内格式：加粗 + 链接可点击（Markdown [文本](url) 与裸 URL 两种形态，单趟扫描避免二次匹配 href） */
+/** 行内格式：加粗 + 行内代码 + 链接可点击（Markdown [文本](url) 与裸 URL 两种形态，单趟扫描避免二次匹配 href） */
 function formatInline(line: string): string {
   return line
+    .replace(/`([^`]+)`/g, '<code style="background:#f4f4f5;border-radius:4px;padding:0 4px;font-size:11px;color:#27272a">$1</code>')
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
     .replace(
       /\[([^\]]*)\]\((https?:\/\/[A-Za-z0-9\-._~:/?#[\]@!$&'+,;=%]+)\)|(https?:\/\/[A-Za-z0-9\-._~:/?#@!$&'+,;=%]+)/g,
@@ -154,6 +157,38 @@ function buildTable(lines: string[], start: number): { html: string; next: numbe
   };
 }
 
+const HEADING_STYLES: Record<number, string> = {
+  1: 'font-size:15px;font-weight:700;color:#18181b;margin:12px 0 4px',
+  2: 'font-size:14px;font-weight:600;color:#18181b;margin:10px 0 4px',
+  3: 'font-size:13px;font-weight:600;color:#27272a;margin:8px 0 3px',
+  4: 'font-size:12.5px;font-weight:600;color:#3f3f46;margin:6px 0 2px',
+};
+
+/** # 标题 / --- 分割线 / 列表项 / 空行 的块级渲染，返回 null 表示普通文本行 */
+function renderBlockLine(line: string): string | null {
+  const heading = line.match(/^(#{1,4})\s+(.*)$/);
+  if (heading) {
+    return `<div style="${HEADING_STYLES[heading[1].length]}">${formatInline(heading[2])}</div>`;
+  }
+  if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+    return '<div style="border-top:1px solid #f0f0f2;margin:8px 0"></div>';
+  }
+  const bullet = line.match(/^(\s*)[-*•]\s+(.*)$/);
+  if (bullet) {
+    const indent = Math.floor(bullet[1].length / 2) * 14;
+    return `<div style="display:flex;gap:6px;padding-left:${indent}px;margin:1.5px 0"><span style="color:#00b8b0;flex-shrink:0">•</span><span style="flex:1;min-width:0">${formatInline(bullet[2])}</span></div>`;
+  }
+  const ordered = line.match(/^(\s*)(\d+)[.、)]\s*(.*)$/);
+  if (ordered) {
+    const indent = Math.floor(ordered[1].length / 2) * 14;
+    return `<div style="display:flex;gap:6px;padding-left:${indent}px;margin:1.5px 0"><span style="color:#a1a1aa;flex-shrink:0;min-width:16px;text-align:right">${ordered[2]}.</span><span style="flex:1;min-width:0">${formatInline(ordered[3])}</span></div>`;
+  }
+  if (!line.trim()) {
+    return '<div style="height:4px"></div>';
+  }
+  return null;
+}
+
 function formatContent(text: string): string {
   const stripped = text
     // 安全网：剥除可能泄漏的工具协议标记
@@ -179,6 +214,13 @@ function formatContent(text: string): string {
       out.push(
         `<div style="margin-top:6px;display:flex;align-items:flex-start;gap:6px;border-radius:8px;border:1px solid #f4f4f5;background:#fafafa;padding:6px 10px;font-size:10.5px;line-height:1.6;color:#a1a1aa">${SOURCE_ICON_SVG}<span>${body}</span></div>`,
       );
+      i++;
+      continue;
+    }
+    // 标题 / 分割线 / 列表 / 空行的块级渲染
+    const block = renderBlockLine(line);
+    if (block !== null) {
+      out.push(block);
       i++;
       continue;
     }
@@ -233,9 +275,13 @@ interface ChartSpec {
 }
 
 interface RecommendItem {
-  id: string;
-  tag?: string;
-  reason?: string;
+  id?: string; // 旧协议：库内商品 ID（选品库已不作为选品依据，保留渲染兼容）
+  name?: string; // 方向卡：具体产品方向名
+  tag?: string; // 主推/次推/备选/观察/劝退
+  reason?: string; // 差异化推荐理由
+  price?: string; // 建议定价带，如 $15.99-19.99
+  cost?: string; // 1688 参考成本
+  keyword?: string; // 1688 找货搜索词
 }
 
 type ContentBlock =
@@ -309,14 +355,19 @@ function parseRecommendItems(raw: unknown): RecommendItem[] {
     .map((it): RecommendItem | null => {
       if (typeof it !== 'object' || it === null) return null;
       const r = it as Record<string, unknown>;
-      if (typeof r.id !== 'string' || !r.id) return null;
-      const item: RecommendItem = { id: r.id };
+      const item: RecommendItem = {};
+      if (typeof r.id === 'string' && r.id) item.id = r.id;
+      if (typeof r.name === 'string' && r.name.trim()) item.name = r.name;
+      if (!item.id && !item.name) return null;
       if (typeof r.tag === 'string') item.tag = r.tag;
       if (typeof r.reason === 'string') item.reason = r.reason;
+      if (typeof r.price === 'string') item.price = r.price;
+      if (typeof r.cost === 'string') item.cost = r.cost;
+      if (typeof r.keyword === 'string') item.keyword = r.keyword;
       return item;
     })
     .filter((it): it is RecommendItem => it !== null)
-    .slice(0, 4);
+    .slice(0, 5);
 }
 
 /** 文本段按 [PRODUCT:id] 拆分为文本块与商品块 */
@@ -528,7 +579,7 @@ const TAG_STYLES: Record<string, string> = {
   劝退: 'bg-zinc-400/10 text-zinc-500',
 };
 
-/** <cards> 协议渲染：选品推荐卡片清单 */
+/** <cards> 协议渲染：选品方向卡片清单（外部趋势驱动，不依赖选品库） */
 function RecommendCards({
   items,
   lookup,
@@ -539,75 +590,133 @@ function RecommendCards({
   return (
     <div className="space-y-2">
       {items.map((it, i) => {
-        const p = lookup(it.id);
-        if (!p) {
+        // 旧协议：携带库内商品 ID 时走详情卡渲染（选品库已不作为选品依据）
+        if (it.id) {
+          const p = lookup(it.id);
+          if (!p) {
+            return (
+              <div
+                key={i}
+                className="flex items-center gap-2 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-3 py-2.5 text-[11px] text-zinc-400"
+              >
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {it.id} 商品信息加载中…
+              </div>
+            );
+          }
+          const scoreColor =
+            p.score.total >= 85
+              ? 'text-[#fe2c55]'
+              : p.score.total >= 70
+                ? 'text-[#00b8b0]'
+                : p.score.total >= 55
+                  ? 'text-amber-600'
+                  : 'text-zinc-500';
           return (
-            <div
-              key={i}
-              className="flex items-center gap-2 rounded-xl border border-dashed border-zinc-200 bg-zinc-50 px-3 py-2.5 text-[11px] text-zinc-400"
-            >
-              <Loader2 className="h-3 w-3 animate-spin" />
-              {it.id} 商品信息加载中…
+            <div key={i} className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm">
+              <div className="flex gap-3">
+                <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-zinc-100">
+                  <Image src={p.image} alt={p.name} fill className="object-cover" sizes="56px" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="truncate text-[13px] font-medium text-zinc-900">{p.name}</p>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      {it.tag && (
+                        <span
+                          className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${TAG_STYLES[it.tag] ?? 'bg-zinc-100 text-zinc-500'}`}
+                        >
+                          {it.tag}
+                        </span>
+                      )}
+                      <span className={`text-sm font-bold ${scoreColor}`}>{p.score.total}分</span>
+                    </div>
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-zinc-500">
+                    <span>{p.category}</span>
+                    <span className="font-medium text-zinc-700">${p.price}</span>
+                    <span>利润率 {Math.round(p.score.profitMargin * 100)}%</span>
+                    <span
+                      className={`font-medium ${p.score.growthRate >= 0 ? 'text-[#fe2c55]' : 'text-zinc-400'}`}
+                    >
+                      7日{p.score.growthRate >= 0 ? '+' : ''}
+                      {(p.score.growthRate * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                </div>
+              </div>
+              {it.reason && (
+                <p className="mt-2 border-t border-zinc-100 pt-2 text-[11px] leading-relaxed text-zinc-500">
+                  <span className="mr-1 text-[#fe2c55]">✦</span>
+                  {it.reason}
+                </p>
+              )}
             </div>
           );
         }
-        const scoreColor =
-          p.score.total >= 85
-            ? 'text-[#fe2c55]'
-            : p.score.total >= 70
-              ? 'text-[#00b8b0]'
-              : p.score.total >= 55
-                ? 'text-amber-600'
-                : 'text-zinc-500';
-        return (
-          <div
-            key={i}
-            className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm"
-          >
-            <div className="flex gap-3">
-              <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-zinc-100">
-                <Image
-                  src={p.image}
-                  alt={p.name}
-                  fill
-                  className="object-cover"
-                  sizes="56px"
-                />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-start justify-between gap-2">
-                  <p className="truncate text-[13px] font-medium text-zinc-900">{p.name}</p>
-                  <div className="flex shrink-0 items-center gap-1.5">
-                    {it.tag && (
-                      <span
-                        className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${TAG_STYLES[it.tag] ?? 'bg-zinc-100 text-zinc-500'}`}
-                      >
-                        {it.tag}
-                      </span>
-                    )}
-                    <span className={`text-sm font-bold ${scoreColor}`}>{p.score.total}分</span>
-                  </div>
-                </div>
-                <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-zinc-500">
-                  <span>{p.category}</span>
-                  <span className="font-medium text-zinc-700">${p.price}</span>
-                  <span>利润率 {Math.round(p.score.profitMargin * 100)}%</span>
-                  <span>
-                    7日增幅 {p.score.growthRate >= 0 ? '+' : ''}
-                    {Math.round(p.score.growthRate * 100)}%
-                  </span>
-                </div>
-              </div>
-            </div>
-            {it.reason && (
-              <p className="mt-2 border-t border-zinc-100 pt-2 text-[11px] leading-relaxed text-zinc-500">
-                <span className="mr-1 font-medium text-zinc-400">依据</span>
-                {it.reason}
-              </p>
+        // 方向卡：外部趋势驱动的选品方向
+        return <DirectionCard key={i} item={it} />;
+      })}
+    </div>
+  );
+}
+
+/** 选品方向卡：产品方向 + 定价带 + 参考成本 + 依据 + 1688 找货直达 */
+function DirectionCard({ item: it }: { item: RecommendItem }) {
+  const sourcingUrl = it.keyword
+    ? `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(it.keyword)}`
+    : undefined;
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm">
+      <div className="flex items-start gap-2.5">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[#fe2c55]/10">
+          <Package className="h-4 w-4 text-[#fe2c55]" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <p className="text-[13px] font-medium leading-snug text-zinc-900">{it.name}</p>
+            {it.tag && (
+              <span
+                className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${TAG_STYLES[it.tag] ?? 'bg-zinc-100 text-zinc-500'}`}
+              >
+                {it.tag}
+              </span>
             )}
           </div>
-        );
-      })}
+          {(it.price || it.cost) && (
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-zinc-500">
+              {it.price && (
+                <span>
+                  建议定价 <span className="font-medium text-zinc-700">{it.price}</span>
+                </span>
+              )}
+              {it.cost && (
+                <span>
+                  1688 参考成本 <span className="font-medium text-zinc-700">{it.cost}</span>
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      {it.reason && (
+        <p className="mt-2 border-t border-zinc-100 pt-2 text-[11px] leading-relaxed text-zinc-500">
+          <span className="mr-1 text-[#fe2c55]">✦</span>
+          {it.reason}
+        </p>
+      )}
+      {sourcingUrl && (
+        <a
+          href={sourcingUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-2 inline-flex items-center gap-1 rounded-md bg-[#00b8b0]/10 px-2 py-1 text-[11px] font-medium text-[#00b8b0] transition-colors hover:bg-[#00b8b0]/20"
+        >
+          <Search className="h-3 w-3" />
+          1688 找货：{it.keyword}
+          <ArrowUpRight className="h-3 w-3" />
+        </a>
+      )}
     </div>
   );
 }
@@ -627,7 +736,7 @@ function MessageContent({
     const set = new Set<string>();
     for (const b of blocks) {
       if (b.kind === 'product') set.add(b.id);
-      else if (b.kind === 'cards') for (const it of b.items) set.add(it.id);
+      else if (b.kind === 'cards') for (const it of b.items) if (it.id) set.add(it.id);
     }
     return [...set];
   }, [blocks]);
