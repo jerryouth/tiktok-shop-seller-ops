@@ -1,6 +1,7 @@
 // 趋势数据源适配器层：Agent 不感知来源，后续可插拔 Kalodata / EchoTik 等付费数据源
-// 当前默认实现：WebSearch（无需外部凭据，立即可用）
+// 优先级：Apify（TikTok Creative Center 官方榜，需 APIFY_TOKEN）> WebSearch（无需凭据兜底）
 import { SearchClient, Config } from 'coze-coding-dev-sdk';
+import { fetchTikTokHashtagTrends, isApifyConfigured } from './apify';
 
 export interface TrendQuery {
   category?: string;
@@ -89,8 +90,49 @@ export class WebSearchTrendSource implements TrendDataSource {
   }
 }
 
+/** Apify 趋势数据源：TikTok Creative Center 美区官方 7 日话题榜（真实榜单数据） */
+export class ApifyTrendSource implements TrendDataSource {
+  readonly name = 'tiktok-creative-center(apify)';
+
+  available(): boolean {
+    return isApifyConfigured();
+  }
+
+  async fetchTrends(query: TrendQuery): Promise<TrendResult> {
+    const trends = await fetchTikTokHashtagTrends(20);
+    if (trends.length === 0) throw new Error('TikTok Creative Center 榜单为空');
+
+    // 按关键词/类目相关性加权排序，取前 12 条
+    const kw = `${query.keyword ?? ''} ${query.category ?? ''}`.toLowerCase();
+    const scored = trends
+      .map((t) => {
+        const haystack = `${t.hashtag} ${t.industries.join(' ')}`.toLowerCase();
+        const relevance = kw
+          ? kw.split(/\s+/).reduce((acc, w) => acc + (w && haystack.includes(w) ? 2 : 0), 0)
+          : 0;
+        return { t, weight: relevance * 100 + t.momentumPct };
+      })
+      .sort((a, b) => b.weight - a.weight)
+      .slice(0, 12)
+      .map((x) => x.t)
+      .sort((a, b) => a.rank - b.rank);
+
+    const viewsYi = (v: number) => (v >= 1e8 ? `${(v / 1e8).toFixed(1)}亿` : v >= 1e4 ? `${(v / 1e4).toFixed(0)}万` : String(v));
+
+    return {
+      AI摘要: `TikTok Creative Center 美区近7日话题榜 TOP${scored.length}（官方数据）`,
+      信号: scored.map((t) => ({
+        标题: `#${t.hashtag}（榜单第${t.rank}位）`,
+        摘要: `7日播放 ${viewsYi(t.views)}，发帖 ${viewsYi(t.posts)}；阶段：${t.trendStage || '未知'}，方向：${t.trendDirection || '未知'}，动能 ${t.momentumPct >= 0 ? '+' : ''}${t.momentumPct.toFixed(1)}%${t.industries.length ? `；行业：${t.industries.slice(0, 3).join('/')}` : ''}`,
+        来源: 'TikTok Creative Center',
+        时间: new Date().toISOString().slice(0, 10),
+      })),
+    };
+  }
+}
+
 /** 已注册数据源（按优先级排列），未来在此追加 Kalodata / EchoTik 适配器 */
-const sources: TrendDataSource[] = [new WebSearchTrendSource()];
+const sources: TrendDataSource[] = [new ApifyTrendSource(), new WebSearchTrendSource()];
 
 /** 聚合入口：遍历可用数据源，首个成功即返回 */
 export async function fetchTrendSignals(

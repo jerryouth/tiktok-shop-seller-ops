@@ -14,6 +14,7 @@ import {
 import { computeUnitEconomics } from '@/lib/unit-economics';
 import { getUpcomingEvents } from './sources/calendar';
 import { isSourcingConfigured, searchSourcing } from './sources/sourcing';
+import { fetchGoogleTrends, isApifyConfigured } from './sources/apify';
 import { fetchTrendSignals } from './sources/trends';
 import type { Skill, SkillContext } from './types';
 
@@ -256,6 +257,46 @@ const getHotTrendsSkill: Skill = {
   },
 };
 
+const getGoogleTrendsSkill: Skill = {
+  name: 'getGoogleTrends',
+  description:
+    '查询 Google Trends 美国搜索兴趣（真实搜索指数 0-100、环/同比动能、飙升关联词、高热度州），用于验证需求季节性与搜索热度；需配置 APIFY_TOKEN，未配置时不可用',
+  argsDoc:
+    '{ searchTerms: string[]（英文搜索词，1-5个，如 ["magnetic lashes"]）, timeRange?: 时间范围（默认 today 3-m）, geo?: 地区（默认 US） }',
+  async run(args) {
+    if (!isApifyConfigured()) throw new Error('未配置 APIFY_TOKEN，Google Trends 数据源不可用');
+    const terms = asStringArray(args.searchTerms).slice(0, 5);
+    if (terms.length === 0) throw new Error('需要提供 searchTerms（英文搜索词数组）');
+    const result = await fetchGoogleTrends(
+      terms,
+      asString(args.timeRange) ?? 'today 3-m',
+      asString(args.geo) ?? 'US',
+    );
+    return {
+      data: {
+        数据源: 'Google Trends (via Apify)',
+        查询词: terms,
+        洞察: result.insights.map((it) => ({
+          搜索词: it.term,
+          有数据: it.hasData,
+          方向: it.direction,
+          环比变化: `${it.changePercent >= 0 ? '+' : ''}${it.changePercent}%`,
+          动能: `${it.momentumPercent >= 0 ? '+' : ''}${it.momentumPercent}%`,
+          最新指数: it.latest,
+          均值指数: it.average,
+          峰值: it.peakValue ? `${it.peakValue}（${it.peakDate}）` : '无',
+          接近峰值: it.isNearPeak,
+          飙升关联词: it.topRisingQueries,
+          高热度地区: it.topRegions,
+          解读: it.summary,
+        })),
+        兴趣时序_近24点: result.interestOverTime.slice(-24),
+      },
+      summary: `获取 ${result.insights.length} 个搜索词趋势洞察`,
+    };
+  },
+};
+
 const calcUnitEconomicsSkill: Skill = {
   name: 'calcUnitEconomics',
   description: '测算单品利润模型（毛利/净利/ROI/盈亏平衡CPA）',
@@ -388,6 +429,7 @@ const registry = new Map<string, Skill>(
     calcUnitEconomicsSkill,
     getSeasonalCalendarSkill,
     searchSourcingSkill,
+    getGoogleTrendsSkill,
   ].map((s) => [s.name, s]),
 );
 
