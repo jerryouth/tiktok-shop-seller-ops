@@ -74,6 +74,7 @@ export function buildSystemPrompt(): string {
    - 重点货源用 getSourcingDetail 查阶梯价与起订量：测试期（小批量）按高阶梯价算成本，放量期按低阶梯价算，两版经济模型差异大时必须都展示
    - 用户发图片找货（爆品截图/竞对主图）时用 searchSourcingByImage；返回"未开通"时如实告知并改用文字关键词 searchSourcing
    - 1688 接口每日配额极低，同一关键词禁止重复调用，已查过的词直接复用对话中已有结果
+   - 若工具返回「错误」字段（配额用完/接口异常）：必须在正文第一段如实告知用户"1688 实时接口暂不可用+原因+次日重置"，本次货源数据降级为直达链接+经验估算（标 C 级证据），禁止静默降级成只给链接卡片
 
 ## 工作方式（工具协议，必须严格遵守）
 你按需调用工具获取真实数据，再做分析。每一轮回复只有两种形态：
@@ -115,6 +116,8 @@ ${skillDocs}
 ### 1. 图表 <chart>：趋势、对比、占比类数据必须配图表，禁止只堆文字数字
 单行输出一个标签，JSON 必须合法（双引号、无注释、无尾逗号），数据【只能来自工具返回】，禁止编造：
 - 折线/柱状：<chart>{"type":"line","title":"搜索兴趣近3个月走势","source":"Google Trends · 2026-02-03","x":["11/10","11/17"],"series":[{"name":"magnetic lashes","data":[58,63]}]}</chart>
+- 字段名严格使用 x / series / data / indicators，禁止用 xAxis、categories、labels 等别名；data 必须是数字数组（不要加引号变成字符串）
+- 没有真实数据时宁可不输出图表，也禁止输出 x 或 data 为空数组的图表（空图表是事故）
   - type 可为 "line" 或 "bar"；x 为横轴标签数组；series 每项含 name 与 data（数值数组，长度与 x 一致）；多 series 用于多方向对比
 - 雷达图（多维对比）：<chart>{"type":"radar","title":"候选方向评分对比","source":"calcUnitEconomics 测算","indicators":[{"name":"毛利率","max":100},{"name":"ROI","max":100}],"series":[{"name":"方向A","data":[68,42]}]}</chart>
 - 饼图（占比分布）：<chart>{"type":"pie","title":"话题行业占比","source":"TikTok Creative Center · 7日榜","data":[{"name":"美妆个护","value":5}]}</chart>

@@ -14,6 +14,7 @@ import {
 import { computeUnitEconomics } from '@/lib/unit-economics';
 import { getUpcomingEvents } from './sources/calendar';
 import {
+  build1688SearchUrl,
   getSourcingDetail,
   isSourcingConfigured,
   searchSourcing,
@@ -386,7 +387,24 @@ const searchSourcingSkill: Skill = {
       return { data: { 错误: '缺少 keyword 参数' }, summary: '参数缺失' };
     }
     const limit = Math.min(10, Math.max(1, asNumber(args.limit) ?? 5));
-    const result = await searchSourcing(keyword, limit);
+    let result;
+    try {
+      result = await searchSourcing(keyword, limit);
+    } catch (e) {
+      // 配额/网络失败：不抛给 runner，返回结构化降级结果，让模型如实告知用户而不是静默出找货卡
+      const msg = e instanceof Error ? e.message : String(e);
+      return {
+        data: {
+          错误: msg,
+          配额状态: msg.includes('配额') ? '今日已用完，次日重置' : '接口异常',
+          证据等级: 'C（直达链接兜底）',
+          搜索词: keyword,
+          直达链接: build1688SearchUrl(keyword),
+          降级要求: '必须向用户明确说明 1688 实时接口暂不可用及原因，本次成本为经验估算',
+        },
+        summary: `货源接口失败：${msg.slice(0, 40)}`,
+      };
+    }
     if (result.offers.length === 0) {
       return {
         data: {
@@ -445,7 +463,20 @@ const getSourcingDetailSkill: Skill = {
     if (!numIid) {
       return { data: { 错误: '缺少 numIid 参数' }, summary: '参数缺失' };
     }
-    const d = await getSourcingDetail(numIid);
+    let d;
+    try {
+      d = await getSourcingDetail(numIid);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return {
+        data: {
+          错误: msg,
+          配额状态: msg.includes('配额') ? '今日已用完，次日重置' : '接口异常',
+          降级要求: '必须向用户明确说明详情数据获取失败及原因，成本按 searchSourcing 列表价估算',
+        },
+        summary: `详情查询失败：${msg.slice(0, 40)}`,
+      };
+    }
     if (!d) {
       return { data: { 错误: '详情接口未配置' }, summary: '接口未配置' };
     }

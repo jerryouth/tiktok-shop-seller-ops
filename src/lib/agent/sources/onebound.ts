@@ -126,6 +126,10 @@ async function callApi(path: string, params: Record<string, string>): Promise<On
   const code = json.error_code ?? '';
   if (code && code !== '0000') {
     const msg = String(json.error || json.reason || `error_code=${code}`);
+    // 配额超量（4013）：给出干净的中文原因，避免把 key/供应商联系方式泄漏到对话里
+    if (code === '4013' || msg.includes('已超量')) {
+      throw new Error('1688 接口今日调用配额已用完（约 10 次/日，次日重置）');
+    }
     // 无权访问（如 img_upload 未开通）单独给出可操作的提示
     if (code === '4005' || msg.includes('无权访问')) {
       throw new Error(`Onebound 接口能力未开通（${path}），需联系供应商开通后使用`);

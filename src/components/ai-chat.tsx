@@ -205,6 +205,20 @@ function formatContent(text: string): string {
   let i = 0;
   while (i < lines.length) {
     const line = lines[i];
+    // ``` 围栏代码块 → 等宽预格式化块
+    if (/^```/.test(line.trim())) {
+      const buf: string[] = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i].trim())) {
+        buf.push(lines[i]);
+        i++;
+      }
+      i++; // 跳过闭合 ```
+      out.push(
+        `<pre style="margin:6px 0;max-height:220px;overflow:auto;border-radius:8px;background:#f8f8fa;border:1px solid #f0f0f2;padding:8px 10px;font-size:10.5px;line-height:1.55;color:#52525b;white-space:pre-wrap;word-break:break-all">${buf.join('\n')}</pre>`,
+      );
+      continue;
+    }
     // Markdown 表格 → HTML 表格（对比数据可读性）
     if (isTableLine(line)) {
       const table = buildTable(lines, i);
@@ -299,9 +313,15 @@ type ContentBlock =
   | { kind: 'pending'; label: string };
 
 function asFiniteNumbers(v: unknown): number[] {
-  return Array.isArray(v)
-    ? v.filter((n): n is number => typeof n === 'number' && Number.isFinite(n))
-    : [];
+  if (!Array.isArray(v)) return [];
+  return v
+    .map((n): number | null => {
+      if (typeof n === 'number' && Number.isFinite(n)) return n;
+      // 容错：模型偶发把数字输出成字符串（"63"）
+      if (typeof n === 'string' && n.trim() !== '' && Number.isFinite(Number(n))) return Number(n);
+      return null;
+    })
+    .filter((n): n is number => n !== null);
 }
 
 /** 宽松校验图表 JSON，字段不合法时返回 null（前端静默降级，不渲染坏图） */
@@ -314,7 +334,9 @@ function parseChartSpec(raw: unknown): ChartSpec | null {
   const spec: ChartSpec = { type };
   if (typeof r.title === 'string') spec.title = r.title;
   if (typeof r.source === 'string') spec.source = r.source;
-  if (Array.isArray(r.x)) spec.x = r.x.map((v) => String(v));
+  // x 轴标签容错：模型偶发用 xAxis / categories / labels 别名
+  const xRaw = r.x ?? r.xAxis ?? r.categories ?? r.labels;
+  if (Array.isArray(xRaw)) spec.x = xRaw.map((v) => String(v));
   if (Array.isArray(r.series)) {
     spec.series = r.series
       .map((s): ChartSeries | null => {
@@ -348,6 +370,12 @@ function parseChartSpec(raw: unknown): ChartSpec | null {
         return { name: ir.name, value: ir.value };
       })
       .filter((it): it is { name: string; value: number } => it !== null);
+  }
+
+  // line/bar 缺 x 标签时按 series 数据长度补序号标签，宁可标签简陋也不丢图
+  if ((type === 'line' || type === 'bar') && spec.series?.length && !spec.x?.length) {
+    const len = Math.max(...spec.series.map((s) => s.data.length));
+    if (len > 0) spec.x = Array.from({ length: len }, (_, i) => `${i + 1}`);
   }
 
   if ((type === 'line' || type === 'bar') && (!spec.x?.length || !spec.series?.length)) return null;
@@ -415,10 +443,25 @@ function parseBlocks(content: string, streaming?: boolean): ContentBlock[] {
       }
       if (tag === 'chart') {
         const spec = parseChartSpec(raw);
-        if (spec) blocks.push({ kind: 'chart', spec });
+        if (spec) {
+          blocks.push({ kind: 'chart', spec });
+        } else {
+          // 解析失败不静默丢弃：回显原始 JSON，提示数据异常
+          blocks.push({
+            kind: 'text',
+            text: `> 图表数据格式异常，以下为模型原始输出：\n\n\`\`\`json\n${m[2].slice(0, 600)}\n\`\`\``,
+          });
+        }
       } else {
         const items = parseRecommendItems(raw);
-        if (items.length) blocks.push({ kind: 'cards', items });
+        if (items.length) {
+          blocks.push({ kind: 'cards', items });
+        } else {
+          blocks.push({
+            kind: 'text',
+            text: `> 推荐卡片数据格式异常，以下为模型原始输出：\n\n\`\`\`json\n${m[2].slice(0, 600)}\n\`\`\``,
+          });
+        }
       }
     }
     last = idx + m[0].length;
@@ -1001,8 +1044,11 @@ export function AiChatPage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [products, setProducts] = useState<ProductWithScore[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesScrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /** 贴底跟随：用户上滚超过阈值后停止自动滚动，回到底部附近恢复 */
+  const stickToBottomRef = useRef(true);
 
   // 挂载时加载商品数据（兼容旧协议 [PRODUCT:id] 与库内 ID 卡片渲染）
   useEffect(() => {
@@ -1013,8 +1059,17 @@ export function AiChatPage() {
   }, []);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (stickToBottomRef.current) {
+      messagesEndRef.current?.scrollIntoView({ block: 'end' });
+    }
   }, [messages]);
+
+  const handleMessagesScroll = useCallback(() => {
+    const el = messagesScrollRef.current;
+    if (!el) return;
+    // 距底部 120px 以内视为贴底，继续跟随流式输出；否则保留用户浏览位置
+    stickToBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }, []);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -1024,6 +1079,7 @@ export function AiChatPage() {
     async (text: string) => {
       const trimmed = text.trim();
       if (!trimmed || isStreaming) return;
+      stickToBottomRef.current = true;
 
       const userMsg: ChatMessage = {
         id: `user-${Date.now()}`,
@@ -1229,7 +1285,7 @@ export function AiChatPage() {
       </div>
 
       {/* 消息区域 */}
-      <div className="flex-1 overflow-y-auto px-5 py-5">
+      <div ref={messagesScrollRef} onScroll={handleMessagesScroll} className="flex-1 overflow-y-auto px-5 py-5">
         <div className="mx-auto w-full max-w-3xl">
           {messages.length === 0 && (
             <div className="flex min-h-[60vh] flex-col items-center justify-center">
