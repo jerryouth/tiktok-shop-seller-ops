@@ -16,7 +16,7 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 
 1. **选品库**（`/products`）：表格（图片/名称/类目/售价/销量/评分/7日增幅/上架时间/选品评分）、关键词防抖搜索、类目/价格/销量/评分/分数组合筛选、6 字段排序、分页、批量删除、新增商品对话框、CSV 批量导入、商品详情抽屉（雷达图 + 近 14 天销量 + 推荐理由）。
 2. **智能选品评分**（`src/lib/scoring.ts`）：热度 25% + 利润 25% + 销量 20% + 竞争环境 15% + 增长势头 15%，0-100 分；≥85 标注「潜力爆款」；自动生成中文推荐理由（评级开场 → 核心优势 → 风险提示 → 运营建议）。
-3. **市场趋势看板**（`/`）：4 张统计卡片、热销品类条形图、近 14 天销量折线、飙升商品榜（近 7 天增幅 TOP6）、评分分布环形饼图。
+3. **市场趋势看板**（`/` + `/api/trends`）：**真实数据版**——TikTok Creative Center 美区 7 日官方榜（经 Apify，话题/播放/发帖/动能/阶段/行业，按播放降序去重）+ Google Trends 搜索兴趣（默认词优先取电商相关行业话题，支持自定义英文词查询）+ 美国营销日历倒计时。服务端 30 分钟内存缓存（TikTok/Google 分开缓存，globalThis 挂载）；4 张统计卡（在榜话题/上升期/总播放/下一节点）、热榜表格（TOP15 含 Creative Center 外链）、行业热度条形图、飙升话题 TOP5、Google 兴趣折线+洞察卡（指数/环比/飙升关联词/接近峰值）、营销节点卡片（倒计时+备货紧张标记+文化洞察）。共享类型 `src/lib/trend-types.ts`。
 4. **AI 选品 Agent「老K」**（`src/lib/agent/` + `/api/chat`）：顶级选品总监人设（懂数据/美国文化/ROI/毛利；红线：毛利≥55%、盈亏平衡 CPA>0、轻小件、$9.99-$29.99 黄金定价带），ReAct 多跳推理（协议式工具调用，非原生 function calling）。模型输出 `<tool_call>{"skill":"...","args":{...}}</tool_call>` → runner 解析执行 Skill → `<tool_result>` 注入观察 → 循环至产出最终回答（最多 10 轮，耗尽时强制收敛产出回答）。系统提示词注入服务端真实日期（北京/美西双时区），日期与倒计时一律以工具返回为准，禁止模型凭记忆推算当前时间。**选品策略为外部趋势驱动：选品库（queryProducts 等 5 个库内 Skill 仍在注册表但不出现在提示词文档中）不作为选品依据，禁止推荐库内商品/ID**；选品工具仅 5 个（提示词文档自动生成）——getHotTrends（趋势源适配器层 `sources/trends.ts`：ApifyTrendSource 优先[TikTok Creative Center 美区官方榜，需 APIFY_TOKEN，见 `sources/apify.ts`] > WebSearchTrendSource 兜底）、getGoogleTrends（Google 搜索兴趣，经 Apify Actor onepierre~google-trends-insights，返回 0-100 指数/动能/飙升关联词/高热度州/24点时序）、calcUnitEconomics（单品经济模型，费率基准见 `src/lib/unit-economics.ts` FEE_BENCHMARKS）、getSeasonalCalendar（美国营销日历，数据源 `sources/calendar.ts`：12 节点+文化洞察+备货周期）、searchSourcing（1688 货源检索，数据源 `sources/sourcing.ts`：env 配置 `SOURCING_1688_API_URL/KEY` 启用真实数据，未配置降级为直达搜索链接；推荐方向必配「1688 找货卡」：中文搜索词+链接+供应商筛选清单，禁止编造货源数据）。决策闭环：趋势发现→机会推导→需求验证→经济测算→时机判断→风险审查→货源落地。模型：doubao-seed-2-0-pro-260215。SSE 事件协议：skill_start / skill_end / content / done / error。**可视化输出协议**（提示词约束，前端渲染）：`<chart>{JSON}</chart>` 渲染 ECharts 图表（line/bar/radar/pie，数据只能来自工具返回，source 字段必填）；`<cards>[{name,tag,reason,price,cost,keyword}]</cards>` 渲染选品方向卡（≥3 个方向：1 主推+其余次推/备选/观察，name 必填，price 建议定价带、cost 1688 参考成本、keyword 1688 找货词，前端渲染 1688 直达按钮；多候选时正文必须先给 Markdown 对比表）；`> 数据来源：…` 行渲染为来源脚注；图表数据禁止编造。前端 `ai-chat.tsx` 悬浮面板（右下角）：流式打字机渲染、Markdown 渲染（标题/分割线/有序无序列表/行内代码/管道表格真实表格化/来源脚注卡片）、parseBlocks 块解析（文本/chart/cards/流式占位）、Agent 执行步骤可视化（SKILL_ICONS 按技能映射图标）、跨 chunk SSE 行缓冲。
 5. **主图工作台**（`/image-studio` + `src/lib/image-studio.ts` + `/api/image/*`）：AI 拆解主图视觉结构（多模态 LLM 输出元素归一化 bbox），画布拖拽标记框重排布局（也可一键打乱/增删/改文案）。生成链路为两段式：①`produceCreativeBrief` 广告制作 Agent（15 年电商广告总监人设，temperature 0.7）产出 Listing 视觉策划案 CreativeBrief——目标人群/核心卖点/传播钩子 + 4 个镜头的拍摄清单（hero 首图定调/proof 卖点实证/scene 使用场景/detail 细节特写，SHOT_ROLE_META 五色职能标签，用户可编辑/增删/换一版），再以原图为参考按清单批量图生图（4K、无水印、硬性无文字）；prompt 带商业边界控制（产品绝对主角、hero 占比≥50%、其余≥1/3、场景道具只为卖点服务、拒绝文艺片松散构图）；②多角度衍生 `remixAngles`：对满意的镜头图二次图生图（参考图=选中生成图，保持场景连贯），输出微距特写/俯拍陈列/平视瞬间/远景氛围 4 个机位。元素六类型：product/background/prop/text/badge/decor。解析与策划模型 doubao-seed-2-0-pro-260215，生成模型 doubao-seedream-5-0（平台最新）。上传图片经内存仓库 `image-store.ts` 换公网 URL 供图生图回源；参考图 origin 优先取 `COZE_PROJECT_DOMAIN_DEFAULT`（host 头可能是内网地址或带端口后缀的预览域名，生成服务外部回源会失败），host 仅作本地兜底。bbox 清洗规则：先夹取 [0,1] 再丢弃零面积框（模型偶发越界坐标）。
 
@@ -34,7 +34,8 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 │   │       ├── products/route.ts         # GET 列表 / POST 新增 / DELETE 批量
 │   │       ├── products/[id]/route.ts    # GET 详情 / DELETE 单个
 │   │       ├── products/import/route.ts  # POST CSV 导入
-│   │       ├── stats/route.ts            # GET 看板统计
+│   │       ├── stats/route.ts            # GET 看板统计（选品库演示数据）
+│   │       ├── trends/route.ts           # GET 真实趋势聚合（TikTok CC + Google Trends，maxDuration 300s，30min缓存）
 │   │       ├── chat/route.ts             # POST AI Agent 对话（SSE 流式）
 │   │       └── image/
 │   │           ├── analyze/route.ts      # POST 主图结构解析（多模态，maxDuration 120s）
@@ -58,6 +59,7 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 ├── scripts/agent-smoke.ts        # Agent E2E 冒烟（pnpm tsx scripts/agent-smoke.ts）
 ├── scripts/apify-smoke.ts        # Apify 数据源直连冒烟（pnpm tsx scripts/apify-smoke.ts）
 ├── scripts/image-studio-smoke.ts # 主图工作台 E2E 冒烟（pnpm tsx scripts/image-studio-smoke.ts）
+├── scripts/trends-smoke.ts       # 趋势看板接口冒烟（pnpm tsx scripts/trends-smoke.ts，真实抓取约 30-120s）
 │   └── lib/
 │       ├── types.ts              # 全局类型（Product / ScoreResult / DashboardStats…）
 │       ├── scoring.ts            # 评分引擎（维度加权 + 推荐理由生成）

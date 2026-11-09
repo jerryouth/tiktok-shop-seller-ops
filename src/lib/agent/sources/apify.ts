@@ -98,7 +98,11 @@ export async function fetchTikTokHashtagTrends(maxItems = 20): Promise<TikTokHas
       url: typeof it.hashtag_url === 'string' ? it.hashtag_url : '',
       creativeCenterUrl: typeof it.creative_center_url === 'string' ? it.creative_center_url : '',
     }))
-    .filter((t) => t.hashtag);
+    .filter((t) => t.hashtag)
+    // Actor 会返回多个分块（不同周期/分区），同一话题重复出现：按话题去重保留首个
+    .filter((t, i, arr) => arr.findIndex((x) => x.hashtag === t.hashtag) === i)
+    // 统一按播放量降序，消除跨分块 rank 错乱
+    .sort((a, b) => b.views - a.views);
 }
 
 // ---------------------------------------------------------------------------
