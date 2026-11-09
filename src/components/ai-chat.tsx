@@ -278,6 +278,7 @@ interface RecommendItem {
   id?: string; // 旧协议：库内商品 ID（选品库已不作为选品依据，保留渲染兼容）
   name?: string; // 方向卡：具体产品方向名
   tag?: string; // 主推/次推/备选/观察/劝退
+  grade?: string; // 证据可信度 A/B/C
   reason?: string; // 差异化推荐理由
   price?: string; // 建议定价带，如 $15.99-19.99
   cost?: string; // 1688 参考成本
@@ -360,6 +361,7 @@ function parseRecommendItems(raw: unknown): RecommendItem[] {
       if (typeof r.name === 'string' && r.name.trim()) item.name = r.name;
       if (!item.id && !item.name) return null;
       if (typeof r.tag === 'string') item.tag = r.tag;
+      if (typeof r.grade === 'string' && /^[ABC]$/i.test(r.grade)) item.grade = r.grade.toUpperCase();
       if (typeof r.reason === 'string') item.reason = r.reason;
       if (typeof r.price === 'string') item.price = r.price;
       if (typeof r.cost === 'string') item.cost = r.cost;
@@ -579,6 +581,13 @@ const TAG_STYLES: Record<string, string> = {
   劝退: 'bg-zinc-400/10 text-zinc-500',
 };
 
+/** 证据可信度徽章样式：A=双平台印证+真实货源（青实底）/ B=单平台或假设成本（琥珀）/ C=降级数据或纯推断（灰） */
+const GRADE_STYLES: Record<string, { cls: string; tip: string }> = {
+  A: { cls: 'bg-[#00b8b0] text-white', tip: 'A级证据：双平台印证+真实货源+测算过线' },
+  B: { cls: 'bg-amber-500/10 text-amber-600', tip: 'B级证据：单平台强信号或假设成本' },
+  C: { cls: 'bg-zinc-400/10 text-zinc-500', tip: 'C级证据：降级数据或纯推断，下注前需补数据' },
+};
+
 /** <cards> 协议渲染：选品方向卡片清单（外部趋势驱动，不依赖选品库） */
 function RecommendCards({
   items,
@@ -675,13 +684,23 @@ function DirectionCard({ item: it }: { item: RecommendItem }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <p className="text-[13px] font-medium leading-snug text-zinc-900">{it.name}</p>
-            {it.tag && (
-              <span
-                className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] font-medium ${TAG_STYLES[it.tag] ?? 'bg-zinc-100 text-zinc-500'}`}
-              >
-                {it.tag}
-              </span>
-            )}
+            <div className="flex shrink-0 items-center gap-1.5">
+              {it.grade && GRADE_STYLES[it.grade] && (
+                <span
+                  title={GRADE_STYLES[it.grade].tip}
+                  className={`rounded-md px-1.5 py-0.5 text-[10px] font-bold ${GRADE_STYLES[it.grade].cls}`}
+                >
+                  {it.grade}级
+                </span>
+              )}
+              {it.tag && (
+                <span
+                  className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium ${TAG_STYLES[it.tag] ?? 'bg-zinc-100 text-zinc-500'}`}
+                >
+                  {it.tag}
+                </span>
+              )}
+            </div>
           </div>
           {(it.price || it.cost) && (
             <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-zinc-500">
