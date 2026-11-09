@@ -1,7 +1,7 @@
 // 广告制作 Agent：基于产品结构产出 Listing 视觉策划案（策略 + 拍摄清单）
 import { NextRequest, NextResponse } from 'next/server';
 import { HeaderUtils } from 'coze-coding-dev-sdk';
-import { assertImageStudioReady, produceCreativeBrief } from '@/lib/image-studio';
+import { assertImageStudioReady, produceReviewedCreativeBrief } from '@/lib/image-studio';
 import type { ImageStructure } from '@/lib/image-types';
 
 export const maxDuration = 120;
@@ -22,7 +22,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '缺少结构数据 structure' }, { status: 400 });
     }
     const headers = HeaderUtils.extractForwardHeaders(request.headers);
-    const brief = await produceCreativeBrief(body.structure, headers);
+    const brief = await produceReviewedCreativeBrief(body.structure, headers);
     return NextResponse.json({ brief });
   } catch (err) {
     return NextResponse.json(

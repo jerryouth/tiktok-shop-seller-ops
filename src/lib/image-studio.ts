@@ -6,6 +6,7 @@ import {
   SHOT_ROLE_META,
   SHOT_ROLES,
   type CreativeBrief,
+  type BriefReview,
   type ElementType,
   type ImageElement,
   type ImageStructure,
@@ -163,7 +164,15 @@ export async function analyzeImage(
 // 2. 广告制作 Agent：产出 Listing 视觉策划案（Creative Brief）
 // ---------------------------------------------------------------------------
 
-const BRIEF_SYSTEM_PROMPT = `你是一位有 15 年经验的电商广告制作总监，操盘过数百个 TikTok Shop / 亚马逊爆款 Listing 的视觉策划与拍摄。你深知 Listing 图片不是艺术摄影，每一张都有明确的商业任务：首图抢点击、卖点图建信任、场景图造向往、细节图消顾虑。你的策划案永远边界清晰——产品是绝对主角，场景只是卖点的证据，情绪和温度服务于"让人想买"，而不是自我表达。你从不依赖文字标语，只靠画面完成销售。`;
+const BRIEF_SYSTEM_PROMPT = `你是一位有 15 年经验的电商广告制作总监，操盘过数百个 TikTok Shop / 亚马逊爆款 Listing 的视觉策划与拍摄。你深知 Listing 图片不是艺术摄影，每一张都有明确的商业任务：首图抢点击、卖点图建信任、场景图造向往、细节图消顾虑。你的策划案永远边界清晰——产品是绝对主角，场景只是卖点的证据，情绪和温度服务于"让人想买"，而不是自我表达。你从不依赖文字标语，只靠画面完成销售。
+
+你同时是合规守门人，死守宣称边界（美区 FTC 与 TikTok Shop 平台规则）：
+1. 禁止绝对化用语：第一、最佳、100%、永久、彻底治愈 等，画面叙事与卖点表述都不得暗示；
+2. 禁止编造资质：不得虚构认证标志、检测报告、销量数字、奖项（画面中不出现这类道具/元素）；
+3. 功效宣称中性化：健康/美妆/母婴类产品的功效只能"展示使用场景"，不得用画面承诺结果（如"祛皱前后对比"）；
+4. 每个镜头的 claimNote 字段写明证据边界：本镜头涉及的宣称依据是否充足，待补证的宣称只能中性暗示、不得承诺。
+
+首图铁律（KV1 商品识别原则）：首图的唯一使命是让人 1 秒内认出"卖的是什么品类"——产品正面完整、品类特征清晰，不允许为了氛围感牺牲识别度（过度虚化、产品被道具遮挡、只拍局部特写都是失败首图）。`;
 
 interface RawShot {
   role?: unknown;
@@ -172,6 +181,7 @@ interface RawShot {
   emotion?: unknown;
   scene?: unknown;
   composition?: unknown;
+  claimNote?: unknown;
 }
 
 function sanitizeShot(raw: RawShot, index: number): Shot | null {
@@ -193,6 +203,9 @@ function sanitizeShot(raw: RawShot, index: number): Shot | null {
     emotion: emotion || '向往与信赖',
     scene,
     composition: composition || SHOT_ROLE_META[role].duty,
+    ...(typeof raw.claimNote === 'string' && raw.claimNote.trim()
+      ? { claimNote: raw.claimNote.trim() }
+      : {}),
   };
 }
 
@@ -238,29 +251,147 @@ export async function produceCreativeBrief(
 - 可以有温度有情绪，但目标是"让人想买"，不是拍文艺片
 
 严格 JSON 返回（不要 markdown 代码块）：
-{"audience":"目标人群(15字内)","coreSellingPoint":"核心卖点(12字内)","hook":"传播钩子(15字内)","shots":[{"role":"hero|proof|scene|detail","name":"画面短名(2-6字)","sellingPoint":"本镜头服务的卖点(10字内)","emotion":"传达的情绪与理念(12字内)","scene":"画面描述(50-80字，含环境/光线/道具/人物状态)","composition":"构图规范(景别/产品占比/位置，25字内)"}]}`,
+{"audience":"目标人群(15字内)","coreSellingPoint":"核心卖点(12字内)","hook":"传播钩子(15字内)","shots":[{"role":"hero|proof|scene|detail","name":"画面短名(2-6字)","sellingPoint":"本镜头服务的卖点(10字内)","emotion":"传达的情绪与理念(12字内)","scene":"画面描述(50-80字，含环境/光线/道具/人物状态)","composition":"构图规范(景别/产品占比/位置，25字内)","claimNote":"证据边界(15字内，如「材质展示-原图可证」或「功效-无依据，只暗示不承诺」)"}]}`,
       },
     ],
     { model: VISION_MODEL, temperature: 0.7 },
   );
-  const parsed = extractJson(response.content);
-  const rawShots = Array.isArray(parsed.shots) ? (parsed.shots as RawShot[]) : [];
-  const shots = rawShots
-    .map((s, i) => sanitizeShot(s, i))
-    .filter((s): s is Shot => s !== null)
-    .slice(0, 5);
-  if (shots.length === 0) {
-    throw new Error('策划案生成失败，请重试');
+  const brief = parseBriefResponse(response.content);
+  if (!brief) throw new Error('策划案生成失败，请重试');
+  return brief;
+}
+
+/** 从模型输出解析策划案（含字段兜底） */
+function parseBriefResponse(content: string): CreativeBrief | null {
+  try {
+    const parsed = extractJson(content);
+    const rawShots = Array.isArray(parsed.shots) ? (parsed.shots as RawShot[]) : [];
+    const shots = rawShots
+      .map((s, i) => sanitizeShot(s, i))
+      .filter((s): s is Shot => s !== null)
+      .slice(0, 5);
+    if (shots.length === 0) return null;
+    return {
+      audience:
+        typeof parsed.audience === 'string' && parsed.audience.trim()
+          ? parsed.audience.trim()
+          : '跨境消费人群',
+      coreSellingPoint:
+        typeof parsed.coreSellingPoint === 'string' && parsed.coreSellingPoint.trim()
+          ? parsed.coreSellingPoint.trim()
+          : shots[0].sellingPoint,
+      hook: typeof parsed.hook === 'string' && parsed.hook.trim() ? parsed.hook.trim() : '产品质感直击',
+      shots,
+    };
+  } catch {
+    return null;
   }
-  return {
-    audience: typeof parsed.audience === 'string' && parsed.audience.trim() ? parsed.audience.trim() : '跨境消费人群',
-    coreSellingPoint:
-      typeof parsed.coreSellingPoint === 'string' && parsed.coreSellingPoint.trim()
-        ? parsed.coreSellingPoint.trim()
-        : shots[0].sellingPoint,
-    hook: typeof parsed.hook === 'string' && parsed.hook.trim() ? parsed.hook.trim() : '产品质感直击',
-    shots,
-  };
+}
+
+// ---------------------------------------------------------------------------
+// 2.1 策划案五维自审质量门（任一维度 <80 分则带问题清单重写，最多重写 1 轮）
+// ---------------------------------------------------------------------------
+
+const REVIEW_SYSTEM_PROMPT = `你是电商广告 Listing 的视觉质量审查官，按五个维度给策划案打分（0-100 整数），任一维度低于 80 分即不过线。
+
+五维定义：
+1. recognition 商品识别度：首图能否让人 1 秒认出卖的是什么品类（产品正面完整、品类特征清晰；过度虚化/产品被遮挡/看不出卖什么都是低分）
+2. focus 卖点聚焦：是否全案只打一个核心卖点，四个镜头是否各司其职不重复
+3. compliance 合规边界：是否有绝对化用语、编造资质/销量、功效承诺（健康/美妆/母婴类尤其严格），claimNote 是否如实标注证据边界
+4. feasibility 可拍性：场景是否真实可拍摄、构图规范是否明确可执行（产品占比/位置/景别是否写清）
+5. hook 传播钩子：是否有让人截图分享的视觉记忆点，钩子是否服务于卖点
+
+严格 JSON 返回（不要 markdown 代码块）：
+{"recognition":85,"focus":80,"compliance":90,"feasibility":85,"hook":75,"issues":"未过线维度的问题说明（全部过线则为空字符串），50字内"}`;
+
+interface RawReview {
+  recognition?: unknown;
+  focus?: unknown;
+  compliance?: unknown;
+  feasibility?: unknown;
+  hook?: unknown;
+  issues?: unknown;
+}
+
+/** 策划案 + 自审：先产出策划案，再五维打分；不过线则带问题重写一轮 */
+export async function produceReviewedCreativeBrief(
+  structure: ImageStructure,
+  headers?: Record<string, string>,
+): Promise<CreativeBrief> {
+  const brief = await produceCreativeBrief(structure, headers);
+  const client = new LLMClient(new Config(), headers);
+  const review1 = await reviewBrief(client, brief);
+  if (review1.passed) {
+    brief.review = { ...review1.scoresObj, passed: true, attempts: 1 };
+    return brief;
+  }
+  // 带问题清单重写一轮
+  const revised = await reviseBrief(client, brief, review1.issues);
+  if (!revised) {
+    brief.review = { ...review1.scoresObj, passed: false, attempts: 2, issues: review1.issues };
+    return brief;
+  }
+  const review2 = await reviewBrief(client, revised);
+  revised.review = { ...review2.scoresObj, passed: review2.passed, attempts: 2, ...(review2.passed ? {} : { issues: review2.issues }) };
+  return revised;
+}
+
+interface ReviewOutcome {
+  passed: boolean;
+  scoresObj: { scores: BriefReview['scores'] };
+  issues: string;
+}
+
+async function reviewBrief(client: LLMClient, brief: CreativeBrief): Promise<ReviewOutcome> {
+  const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(100, Math.round(v))) : 60);
+  try {
+    const response = await client.invoke(
+      [
+        { role: 'system', content: REVIEW_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content: `请审查以下 Listing 视觉策划案并打分：\n${JSON.stringify({ audience: brief.audience, coreSellingPoint: brief.coreSellingPoint, hook: brief.hook, shots: brief.shots })}`,
+        },
+      ],
+      { model: VISION_MODEL, temperature: 0.2 },
+    );
+    const parsed = extractJson(response.content) as RawReview;
+    const scores = {
+      recognition: num(parsed.recognition),
+      focus: num(parsed.focus),
+      compliance: num(parsed.compliance),
+      feasibility: num(parsed.feasibility),
+      hook: num(parsed.hook),
+    };
+    const passed = Object.values(scores).every((s) => s >= 80);
+    const issues = typeof parsed.issues === 'string' ? parsed.issues.trim() : '';
+    return { passed, scoresObj: { scores }, issues };
+  } catch {
+    // 自审失败不阻塞交付：默认过线但不标 passed 徽章（attempts=0 表示未自审）
+    return {
+      passed: true,
+      scoresObj: { scores: { recognition: 0, focus: 0, compliance: 0, feasibility: 0, hook: 0 } },
+      issues: '',
+    };
+  }
+}
+
+async function reviseBrief(
+  client: LLMClient,
+  brief: CreativeBrief,
+  issues: string,
+): Promise<CreativeBrief | null> {
+  const response = await client.invoke(
+    [
+      { role: 'system', content: BRIEF_SYSTEM_PROMPT },
+      {
+        role: 'user',
+        content: `以下策划案在质量审查中未过线，问题：${issues || '部分维度不达标'}\n\n原策划案：\n${JSON.stringify(brief)}\n\n请针对问题重写策划案（保持同样的 JSON 结构与字段，包括每镜头的 claimNote），只修正问题维度，其余保持。`,
+      },
+    ],
+    { model: VISION_MODEL, temperature: 0.5 },
+  );
+  return parseBriefResponse(response.content);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,8 +438,13 @@ export function buildShotPrompts(
 1. 产品是画面绝对主角，清晰锐利、第一眼可辨；场景、道具、人物只为证明卖点服务，绝不喧宾夺主；
 2. 商业广告大片质感：光影高级、色调统一干净，有生活温度但保持商业片的克制，拒绝文艺片式的松散构图；
 3. 严格保持参考图中产品的外观、颜色、材质、形状与细节完全一致；
-4. 画面中不要出现任何文字、字母、数字、标签、logo 或水印；
-5. 正方形构图。${extraLine}`,
+4. 正方形构图。${extraLine}
+
+画面禁止项（生成结果中绝对不得出现）：
+- 任何文字、字母、数字、标签、logo、水印、认证标志（CE/FDA/FCC 等）、价签、销量数字；
+- 绝对化或功效承诺式的视觉暗示（如使用前后对比、刻度尺量效、夸张箭头标注）；
+- 人物正脸、遮挡产品的手部动作、虚化成色块无法辨认品类的主体；
+- 杂乱背景道具堆砌、产品过小沦为配角、松散文艺片式构图。`,
     };
   });
 }

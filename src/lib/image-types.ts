@@ -69,6 +69,20 @@ export interface Shot {
   scene: string;
   /** 构图规范（景别/产品占比/位置） */
   composition: string;
+  /** 证据边界说明：本镜头涉及的宣称依据是否充足（如「承重20kg-待补证，画面只暗示不承诺」） */
+  claimNote?: string;
+}
+
+/** 策划案自审记录（五维各 ≥80 才交付） */
+export interface BriefReview {
+  /** 五维得分：识别度/卖点聚焦/合规边界/可拍性/传播钩子 */
+  scores: { recognition: number; focus: number; compliance: number; feasibility: number; hook: number };
+  /** 是否全部过线 */
+  passed: boolean;
+  /** 自审轮次（最多 2 轮重写） */
+  attempts: number;
+  /** 未过线维度的问题说明（过线时为空） */
+  issues?: string;
 }
 
 /** Listing 视觉策划案（广告制作 Agent 产出） */
@@ -80,6 +94,8 @@ export interface CreativeBrief {
   /** 传播钩子/视觉记忆点 */
   hook: string;
   shots: Shot[];
+  /** 自审记录（服务端填充） */
+  review?: BriefReview;
 }
 
 /** 生成结果 */

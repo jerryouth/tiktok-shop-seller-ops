@@ -6,7 +6,7 @@ import {
   buildAnglePrompts,
   buildShotPrompts,
   generateImages,
-  produceCreativeBrief,
+  produceReviewedCreativeBrief,
   remixImage,
 } from '../src/lib/image-studio';
 import type { ImageStructure, RemixResult } from '../src/lib/image-types';
@@ -59,13 +59,24 @@ async function main(): Promise<void> {
 
   // 4. 广告制作 Agent：产出 Listing 视觉策划案（直接调核心库，HTTP 层逻辑与 analyze 一致）
   console.log('\n========== 4. 广告拍摄策划案（Creative Brief）==========');
-  const brief = await produceCreativeBrief(structure, {});
+  const brief = await produceReviewedCreativeBrief(structure, {});
   console.log(`  目标人群：${brief.audience}`);
   console.log(`  核心卖点：${brief.coreSellingPoint}`);
   console.log(`  传播钩子：${brief.hook}`);
   for (const s of brief.shots) {
     console.log(`  [${s.role}]「${s.name}」卖点：${s.sellingPoint} ｜ 情绪：${s.emotion}`);
     console.log(`    构图：${s.composition}`);
+    if (s.claimNote) console.log(`    宣称边界：${s.claimNote}`);
+  }
+  if (brief.review) {
+    const sc = brief.review.scores;
+    console.log(
+      `  自审：${brief.review.passed ? '通过' : '未过线'}（第 ${brief.review.attempts} 轮）` +
+        ` 识别度${sc.recognition} 聚焦${sc.focus} 合规${sc.compliance} 可拍性${sc.feasibility} 钩子${sc.hook}`,
+    );
+    if (brief.review.issues?.length) console.log(`  遗留问题：${brief.review.issues.join('；')}`);
+  } else {
+    throw new Error('brief 缺少 review 自审结果');
   }
   if (brief.shots.length === 0) throw new Error('拍摄清单为空');
   if (brief.shots.some((s) => !s.sellingPoint || !s.emotion || !s.composition)) {

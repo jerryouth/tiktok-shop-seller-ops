@@ -9,6 +9,7 @@ import {
   ArrowUp,
   Check,
   Clapperboard,
+  ShieldCheck,
   Download,
   ImagePlus,
   Layers,
@@ -721,6 +722,20 @@ export default function ImageStudioPage() {
               <h2 className="flex items-center gap-1.5 text-[15px] font-semibold text-zinc-900">
                 <Clapperboard className="h-4 w-4 text-[#fe2c55]" />
                 广告拍摄策划案
+                {brief?.review && brief.review.attempts > 0 && (
+                  <span
+                    className={cn(
+                      'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                      brief.review.passed
+                        ? 'bg-[#00b8b0]/10 text-[#00b8b0]'
+                        : 'bg-amber-500/10 text-amber-600',
+                    )}
+                    title={`识别度${brief.review.scores.recognition} · 聚焦${brief.review.scores.focus} · 合规${brief.review.scores.compliance} · 可拍性${brief.review.scores.feasibility} · 钩子${brief.review.scores.hook}${brief.review.issues ? `\n问题：${brief.review.issues}` : ''}`}
+                  >
+                    <ShieldCheck className="h-3 w-3" />
+                    {brief.review.passed ? '五维自审通过' : '自审未过线'}
+                  </span>
+                )}
               </h2>
               <p className="mt-0.5 text-[11px] text-zinc-400">
                 广告制作 Agent 产出：先定传播策略，再开拍摄清单——每张图各司其职，边界清晰，产品永远是主角
@@ -839,6 +854,15 @@ export default function ImageStudioPage() {
                         placeholder="构图规范：景别 / 产品占比 / 位置"
                         className="mt-1.5 h-7 border-zinc-200 bg-white px-2 text-[11px] text-zinc-500 shadow-none"
                       />
+                      {shot.claimNote && (
+                        <p
+                          className="mt-1.5 flex items-start gap-1 rounded bg-zinc-50 px-1.5 py-1 text-[10px] leading-snug text-zinc-400"
+                          title="证据边界：本镜头宣称的依据是否充足（合规审查）"
+                        >
+                          <ShieldCheck className="mt-px h-3 w-3 shrink-0 text-zinc-300" />
+                          {shot.claimNote}
+                        </p>
+                      )}
                     </div>
                   );
                 })}
