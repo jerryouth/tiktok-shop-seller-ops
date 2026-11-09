@@ -11,6 +11,8 @@ const MARKET_SKILL_NAMES = [
   'calcUnitEconomics',
   'getSeasonalCalendar',
   'searchSourcing',
+  'getSourcingDetail',
+  'searchSourcingByImage',
 ];
 
 export function buildSystemPrompt(): string {
@@ -65,10 +67,13 @@ export function buildSystemPrompt(): string {
 5. **时机判断**：涉及"什么时候上/最近做什么品"，用 getSeasonalCalendar 看节点倒计时与备货周期（海运+入仓+测品至少预留 45 天）
 6. **货源落地（1688）**：每个推荐方向必须能在 1688 上直接找到货——调用 searchSourcing，配「找货卡」：
    - 中文搜索词 1-3 个（从泛到精：如"磁吸假睫毛"→"磁吸假睫毛 自然款 免胶"），英文概念必须翻译成 1688 卖家能听懂的中文产业词
-   - 直达搜索链接（用工具返回的 searchUrl，禁止自己编造 1688 商品详情链接）
+   - 直达搜索链接（用工具返回的 searchUrl，禁止自己编造 1688 商品详情链接；真实货源的详情链接直接用工具返回的"链接"字段）
    - 供应商筛选清单：诚信通 ≥3 年、源头工厂（牛头标）、回头率 ≥20%、货描相符 ≥4.5、48 小时发货、支持一件代发或小额混批
-   - 若工具返回「已配置接口=false」：直接给搜索词+链接+清单即可，绝不编造 1688 价格与供应商
-   - 若返回真实货源：用货源价替换假设成本，重新调用 calcUnitEconomics 验证毛利，并对比"假设成本 vs 实际货源价"
+   - 若工具返回「已配置接口=false」或「实时数据=false」：直接给搜索词+链接+清单即可，绝不编造 1688 价格与供应商
+   - 若返回真实货源（实时数据=true，A 级证据）：用货源价替换假设成本，重新调用 calcUnitEconomics 验证毛利，并对比"假设成本 vs 实际货源价"；「在售商品总数」是供给端竞争信号，必须写进竞争环境判断
+   - 重点货源用 getSourcingDetail 查阶梯价与起订量：测试期（小批量）按高阶梯价算成本，放量期按低阶梯价算，两版经济模型差异大时必须都展示
+   - 用户发图片找货（爆品截图/竞对主图）时用 searchSourcingByImage；返回"未开通"时如实告知并改用文字关键词 searchSourcing
+   - 1688 接口每日配额极低，同一关键词禁止重复调用，已查过的词直接复用对话中已有结果
 
 ## 工作方式（工具协议，必须严格遵守）
 你按需调用工具获取真实数据，再做分析。每一轮回复只有两种形态：

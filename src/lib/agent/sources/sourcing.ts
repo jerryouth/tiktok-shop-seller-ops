@@ -20,7 +20,7 @@ export interface SourcingOffer {
   title: string;
   /** 单价（人民币元） */
   price: number;
-  /** 起订量（件） */
+  /** 起订量（件），0 = 未知（列表接口不返回时可调详情接口查） */
   moq: number;
   /** 供应商名 */
   supplier: string;
@@ -32,12 +32,20 @@ export interface SourcingOffer {
   repurchaseRate: string;
   /** 1688 详情页链接 */
   url: string;
+  /** 1688 商品 ID（用于 getSourcingDetail 查阶梯价/起订量） */
+  numIid?: string;
+  /** 商品主图 */
+  picUrl?: string;
 }
 
 export interface SourcingResult {
   keyword: string;
   searchUrl: string;
   offers: SourcingOffer[];
+  /** 在售商品总数（竞争环境信号），仅真实接口提供 */
+  totalResults?: number;
+  /** 数据是否来自实时接口（true=A 级证据；false=降级直达链接） */
+  realtime: boolean;
 }
 
 export interface SourcingDataSource {
@@ -49,6 +57,13 @@ export interface SourcingDataSource {
 
 /** 1688 找货链接统一走 GBK 编码实现（1688 搜索接口按 GBK 解码，UTF-8 会乱码） */
 import { build1688SearchUrl } from '../../url1688';
+import {
+  isOneboundConfigured,
+  oneboundItemDetail,
+  oneboundSearch,
+  oneboundSearchByImage,
+  type OneboundItemDetail,
+} from './onebound';
 
 export { build1688SearchUrl };
 
@@ -138,16 +153,70 @@ class Http1688SourcingSource implements SourcingDataSource {
 
 const source = new Http1688SourcingSource();
 
+/** 数据源优先级：Onebound（真实接口）> 通用 HTTP 数据源 > 降级直达链接 */
 export function isSourcingConfigured(): boolean {
-  return source.available();
+  return isOneboundConfigured() || source.available();
 }
 
 /** 聚合入口：检索 1688 货源 */
 export async function searchSourcing(keyword: string, limit = 5): Promise<SourcingResult> {
   const searchUrl = build1688SearchUrl(keyword);
+  if (isOneboundConfigured()) {
+    const r = await oneboundSearch(keyword, limit);
+    return {
+      keyword,
+      searchUrl,
+      offers: r.offers.map((o) => ({
+        title: o.title,
+        price: o.price,
+        moq: 0,
+        supplier: '',
+        location: '',
+        sales: o.sales > 0 ? `已售 ${o.sales}` : '',
+        repurchaseRate: o.tagPercent,
+        url: o.detailUrl,
+        numIid: o.numIid,
+        picUrl: o.picUrl,
+      })),
+      totalResults: r.totalResults,
+      realtime: true,
+    };
+  }
   if (!source.available()) {
-    return { keyword, searchUrl, offers: [] };
+    return { keyword, searchUrl, offers: [], realtime: false };
   }
   const offers = await source.search(keyword, limit);
-  return { keyword, searchUrl, offers };
+  return { keyword, searchUrl, offers, realtime: true };
+}
+
+/** 商品详情：阶梯价/起订量/产业带/供应商（仅 Onebound 配置时可用） */
+export async function getSourcingDetail(numIid: string): Promise<OneboundItemDetail | null> {
+  if (!isOneboundConfigured()) return null;
+  return oneboundItemDetail(numIid);
+}
+
+/** 以图搜款：base64 图片 → 相似货源（img_upload 未开通时抛友好错误，调用方降级） */
+export async function searchSourcingByImage(
+  imageBase64: string,
+  limit = 5,
+): Promise<SourcingResult> {
+  const r = await oneboundSearchByImage(imageBase64, limit);
+  return {
+    keyword: '(以图搜款)',
+    searchUrl: '',
+    offers: r.offers.map((o) => ({
+      title: o.title,
+      price: o.price,
+      moq: 0,
+      supplier: '',
+      location: '',
+      sales: o.sales > 0 ? `已售 ${o.sales}` : '',
+      repurchaseRate: o.tagPercent,
+      url: o.detailUrl,
+      numIid: o.numIid,
+      picUrl: o.picUrl,
+    })),
+    totalResults: r.totalResults,
+    realtime: true,
+  };
 }

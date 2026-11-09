@@ -13,7 +13,12 @@ import {
 } from '@/lib/types';
 import { computeUnitEconomics } from '@/lib/unit-economics';
 import { getUpcomingEvents } from './sources/calendar';
-import { isSourcingConfigured, searchSourcing } from './sources/sourcing';
+import {
+  getSourcingDetail,
+  isSourcingConfigured,
+  searchSourcing,
+  searchSourcingByImage,
+} from './sources/sourcing';
 import { fetchGoogleTrends, isApifyConfigured } from './sources/apify';
 import { fetchTrendSignals } from './sources/trends';
 import type { Skill, SkillContext } from './types';
@@ -386,6 +391,7 @@ const searchSourcingSkill: Skill = {
       return {
         data: {
           已配置接口: isSourcingConfigured(),
+          实时数据: result.realtime,
           搜索词: keyword,
           直达链接: result.searchUrl,
           货源: [],
@@ -399,21 +405,112 @@ const searchSourcingSkill: Skill = {
     return {
       data: {
         已配置接口: true,
+        实时数据: result.realtime,
+        证据等级: result.realtime ? 'A（1688 实时接口）' : 'C（直达链接）',
         搜索词: keyword,
         直达链接: result.searchUrl,
+        在售商品总数: result.totalResults ?? null,
+        竞争解读:
+          result.totalResults !== undefined
+            ? result.totalResults >= 5000
+              ? '供给极度充足（红海），差异化与价格力是关键'
+              : result.totalResults >= 1000
+                ? '供给充足，需对比阶梯价与回头率筛选'
+                : '供给较少，先发优势明显但需确认货源稳定性'
+            : null,
         货源: result.offers.map((o) => ({
           标题: o.title,
           单价: `¥${o.price}`,
-          起订量: o.moq,
-          供应商: o.supplier,
-          产业带: o.location,
+          起订量: o.moq > 0 ? o.moq : '未知（可用 getSourcingDetail 查）',
+          供应商: o.supplier || '（详情可查）',
+          产业带: o.location || '（详情可查）',
           成交: o.sales,
           回头率: o.repurchaseRate,
           链接: o.url,
+          numIid: o.numIid ?? null,
         })),
       },
-      summary: `${result.offers.length} 个货源 · 最低 ¥${lowest}`,
+      summary: `${result.offers.length} 个货源 · 最低 ¥${lowest}${result.totalResults ? ` · 在售 ${result.totalResults}` : ''}`,
     };
+  },
+};
+
+const getSourcingDetailSkill: Skill = {
+  name: 'getSourcingDetail',
+  description:
+    '查 1688 商品详情：阶梯价（测试期/放量期成本分开算）、起订量、产业带、供应商、SKU 数。searchSourcing 拿到 numIid 后，对重点货源调用',
+  argsDoc: '{ numIid: 1688 商品ID（searchSourcing 返回的 numIid） }',
+  async run(args) {
+    const numIid = asString(args.numIid);
+    if (!numIid) {
+      return { data: { 错误: '缺少 numIid 参数' }, summary: '参数缺失' };
+    }
+    const d = await getSourcingDetail(numIid);
+    if (!d) {
+      return { data: { 错误: '详情接口未配置' }, summary: '接口未配置' };
+    }
+    return {
+      data: {
+        证据等级: 'A（1688 实时接口）',
+        标题: d.title,
+        当前最低单价: `¥${d.price}`,
+        阶梯价: d.priceLadder.map((t) => `≥${t.minQty}${d.unit} → ¥${t.price}`),
+        起订量: `${d.moq}${d.unit}`,
+        产业带: d.location,
+        供应商: d.supplier,
+        已售: d.sales,
+        SKU数: d.skuCount,
+        规格样例: d.propsSample,
+        单件重量: d.itemWeight ?? '未标注',
+        链接: d.detailUrl,
+      },
+      summary: `${d.supplier || d.title} · ¥${d.price} 起 · 起订 ${d.moq}${d.unit} · ${d.location}`,
+    };
+  },
+};
+
+const searchSourcingByImageSkill: Skill = {
+  name: 'searchSourcingByImage',
+  description:
+    '以图搜款：用图片在 1688 搜同款/相似货源（TikTok 爆品截图、竞对主图 → 直接找货）。入参为图片公网 URL 或 base64',
+  argsDoc: '{ image: 图片URL(http/https) 或 base64(dataURL可带前缀), limit?: 条数(默认5) }',
+  async run(args) {
+    const image = asString(args.image);
+    if (!image) {
+      return { data: { 错误: '缺少 image 参数' }, summary: '参数缺失' };
+    }
+    const limit = Math.min(10, Math.max(1, asNumber(args.limit) ?? 5));
+    try {
+      let base64 = image;
+      if (/^https?:\/\//.test(image)) {
+        const resp = await fetch(image, { signal: AbortSignal.timeout(20000) });
+        if (!resp.ok) throw new Error(`图片下载失败 HTTP ${resp.status}`);
+        const buf = Buffer.from(await resp.arrayBuffer());
+        base64 = buf.toString('base64');
+      }
+      const result = await searchSourcingByImage(base64, limit);
+      if (result.offers.length === 0) {
+        return { data: { 货源: [], 提示: '未搜到相似货源，换更清晰的商品主体图重试' }, summary: '图搜无结果' };
+      }
+      const lowest = Math.min(...result.offers.map((o) => o.price));
+      return {
+        data: {
+          证据等级: 'A（1688 实时接口·以图搜款）',
+          货源: result.offers.map((o) => ({
+            标题: o.title,
+            单价: `¥${o.price}`,
+            成交: o.sales,
+            回头率: o.repurchaseRate,
+            链接: o.url,
+            numIid: o.numIid ?? null,
+          })),
+        },
+        summary: `图搜到 ${result.offers.length} 个同款货源 · 最低 ¥${lowest}`,
+      };
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      return { data: { 错误: msg, 降级建议: '改用文字描述关键词走 searchSourcing' }, summary: `图搜失败：${msg.slice(0, 40)}` };
+    }
   },
 };
 
@@ -429,6 +526,8 @@ const registry = new Map<string, Skill>(
     calcUnitEconomicsSkill,
     getSeasonalCalendarSkill,
     searchSourcingSkill,
+    getSourcingDetailSkill,
+    searchSourcingByImageSkill,
     getGoogleTrendsSkill,
   ].map((s) => [s.name, s]),
 );

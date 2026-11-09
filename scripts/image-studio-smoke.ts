@@ -74,7 +74,7 @@ async function main(): Promise<void> {
       `  自审：${brief.review.passed ? '通过' : '未过线'}（第 ${brief.review.attempts} 轮）` +
         ` 识别度${sc.recognition} 聚焦${sc.focus} 合规${sc.compliance} 可拍性${sc.feasibility} 钩子${sc.hook}`,
     );
-    if (brief.review.issues?.length) console.log(`  遗留问题：${brief.review.issues.join('；')}`);
+    if (brief.review.issues) console.log(`  遗留问题：${brief.review.issues}`);
   } else {
     throw new Error('brief 缺少 review 自审结果');
   }
