@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { EChart } from '@/components/echart';
 import type { ProductWithScore } from '@/lib/types';
+import { build1688SearchUrl } from '@/lib/url1688';
 
 /** Agent 执行步骤（Skill 调用轨迹） */
 interface SkillStep {
@@ -673,7 +674,7 @@ function RecommendCards({
 /** 选品方向卡：产品方向 + 定价带 + 参考成本 + 依据 + 1688 找货直达 */
 function DirectionCard({ item: it }: { item: RecommendItem }) {
   const sourcingUrl = it.keyword
-    ? `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(it.keyword)}`
+    ? build1688SearchUrl(it.keyword)
     : undefined;
   return (
     <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm">

@@ -25,6 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { EChart } from '@/components/echart';
 import { cn } from '@/lib/utils';
+import { build1688SearchUrl } from '@/lib/url1688';
 import type { TrendsDashboardPayload, TrendInsightsPayload, TrendOpportunity } from '@/lib/trend-types';
 import type { GoogleTrendInsight, TikTokHashtagTrend } from '@/lib/agent/sources/apify';
 import type { UpcomingEvent } from '@/lib/agent/sources/calendar';
@@ -124,7 +125,7 @@ function OpportunityCard({ opp, rank }: { opp: TrendOpportunity; rank: number })
             {p.sellingPoint && <p className="mt-0.5 text-[11px] text-zinc-500">{p.sellingPoint}</p>}
             {p.keyword1688 && (
               <a
-                href={`https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(p.keyword1688)}`}
+                href={build1688SearchUrl(p.keyword1688)}
                 target="_blank"
                 rel="noreferrer"
                 className="mt-1 inline-flex items-center gap-1 rounded bg-[#00b8b0]/10 px-1.5 py-0.5 text-[10px] font-medium text-[#00b8b0] hover:bg-[#00b8b0]/20"

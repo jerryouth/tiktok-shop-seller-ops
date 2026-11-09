@@ -47,10 +47,10 @@ export interface SourcingDataSource {
   search(keyword: string, limit?: number): Promise<SourcingOffer[]>;
 }
 
-/** 1688 找货直达搜索链接（无需任何接口，始终可用） */
-export function build1688SearchUrl(keyword: string): string {
-  return `https://s.1688.com/selloffer/offer_search.htm?keywords=${encodeURIComponent(keyword)}`;
-}
+/** 1688 找货链接统一走 GBK 编码实现（1688 搜索接口按 GBK 解码，UTF-8 会乱码） */
+import { build1688SearchUrl } from '../../url1688';
+
+export { build1688SearchUrl };
 
 /** 数字解析：兼容 "12.5"、"¥12.5起"、"12.50-15.00"（取最低档） */
 function parsePrice(raw: unknown): number {
