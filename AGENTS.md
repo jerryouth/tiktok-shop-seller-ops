@@ -20,6 +20,8 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 4. **AI 选品 Agent「老K」**（`src/lib/agent/` + `/api/chat`）：顶级选品总监人设（懂数据/美国文化/ROI/毛利；红线：毛利≥55%、盈亏平衡 CPA>0、轻小件、$9.99-$29.99 黄金定价带），ReAct 多跳推理（协议式工具调用，非原生 function calling）。模型输出 `<tool_call>{"skill":"...","args":{...}}</tool_call>` → runner 解析执行 Skill → `<tool_result>` 注入观察 → 循环至产出最终回答（最多 10 轮，耗尽时强制收敛产出回答）。系统提示词注入服务端真实日期（北京/美西双时区），日期与倒计时一律以工具返回为准，禁止模型凭记忆推算当前时间。**选品策略为外部趋势驱动：选品库（queryProducts 等 5 个库内 Skill 仍在注册表但不出现在提示词文档中）不作为选品依据，禁止推荐库内商品/ID**；选品工具仅 5 个（提示词文档自动生成）——getHotTrends（趋势源适配器层 `sources/trends.ts`：ApifyTrendSource 优先[TikTok Creative Center 美区官方榜，需 APIFY_TOKEN，见 `sources/apify.ts`] > WebSearchTrendSource 兜底）、getGoogleTrends（Google 搜索兴趣，经 Apify Actor onepierre~google-trends-insights，返回 0-100 指数/动能/飙升关联词/高热度州/24点时序）、calcUnitEconomics（单品经济模型，费率基准见 `src/lib/unit-economics.ts` FEE_BENCHMARKS）、getSeasonalCalendar（美国营销日历，数据源 `sources/calendar.ts`：12 节点+文化洞察+备货周期）、searchSourcing（1688 货源检索，数据源 `sources/sourcing.ts`：env 配置 `SOURCING_1688_API_URL/KEY` 启用真实数据，未配置降级为直达搜索链接；推荐方向必配「1688 找货卡」：中文搜索词+链接+供应商筛选清单，禁止编造货源数据）。决策闭环：趋势发现→机会推导→需求验证→经济测算→时机判断→风险审查→货源落地。模型：doubao-seed-2-0-pro-260215。SSE 事件协议：skill_start / skill_end / content / done / error。**可视化输出协议**（提示词约束，前端渲染）：`<chart>{JSON}</chart>` 渲染 ECharts 图表（line/bar/radar/pie，数据只能来自工具返回，source 字段必填）；`<cards>[{name,tag,reason,price,cost,keyword}]</cards>` 渲染选品方向卡（≥3 个方向：1 主推+其余次推/备选/观察，name 必填，price 建议定价带、cost 1688 参考成本、keyword 1688 找货词，前端渲染 1688 直达按钮；多候选时正文必须先给 Markdown 对比表）；`> 数据来源：…` 行渲染为来源脚注；图表数据禁止编造。前端 `ai-chat.tsx` 悬浮面板（右下角）：流式打字机渲染、Markdown 渲染（标题/分割线/有序无序列表/行内代码/管道表格真实表格化/来源脚注卡片）、parseBlocks 块解析（文本/chart/cards/流式占位）、Agent 执行步骤可视化（SKILL_ICONS 按技能映射图标）、跨 chunk SSE 行缓冲。
 5. **主图工作台**（`/image-studio` + `src/lib/image-studio.ts` + `/api/image/*`）：AI 拆解主图视觉结构（多模态 LLM 输出元素归一化 bbox），画布拖拽标记框重排布局（也可一键打乱/增删/改文案）。生成链路为两段式：①`produceCreativeBrief` 广告制作 Agent（15 年电商广告总监人设，temperature 0.7）产出 Listing 视觉策划案 CreativeBrief——目标人群/核心卖点/传播钩子 + 4 个镜头的拍摄清单（hero 首图定调/proof 卖点实证/scene 使用场景/detail 细节特写，SHOT_ROLE_META 五色职能标签，用户可编辑/增删/换一版），再以原图为参考按清单批量图生图（4K、无水印、硬性无文字）；prompt 带商业边界控制（产品绝对主角、hero 占比≥50%、其余≥1/3、场景道具只为卖点服务、拒绝文艺片松散构图）；②多角度衍生 `remixAngles`：对满意的镜头图二次图生图（参考图=选中生成图，保持场景连贯），输出微距特写/俯拍陈列/平视瞬间/远景氛围 4 个机位。元素六类型：product/background/prop/text/badge/decor。解析与策划模型 doubao-seed-2-0-pro-260215，生成模型 doubao-seedream-5-0（平台最新）。上传图片经内存仓库 `image-store.ts` 换公网 URL 供图生图回源；参考图 origin 优先取 `COZE_PROJECT_DOMAIN_DEFAULT`（host 头可能是内网地址或带端口后缀的预览域名，生成服务外部回源会失败），host 仅作本地兜底。bbox 清洗规则：先夹取 [0,1] 再丢弃零面积框（模型偶发越界坐标）。
 
+6. **内容测试工作台**（`/testing` + `/api/tests*`）：选品后 7 天内容测试 SOP 产品化——创建测试任务（品名/1688词/盈亏平衡CPA/多条钩子，单变量原则）→ SOP 五阶段进度条（D0准备→D1-3投放→D4判定→D5-7放量→归档）→ 逐日录入 7 项指标（播放/完播/CTR/CPC/加购/CPA/消耗）→ 一键 SOP 判定（规则引擎 `src/lib/testing-sop.ts`：按展示量/消耗加权聚合 → 五维分级[CTR≥1.5%优秀/≥1%及格、完播≥30%/25%、CPC≤$0.3/0.5、加购≥10%/8%、CPA≤盈亏平衡×0.7安全] → 三选一决策[≥2条达标放量/单项短板优化重测≤2轮/CTR持续<1%止损，超$300预算红线强制止损] + 异常诊断[0播放换号/高完播低CTR换品/高CTR低加购查价格Listing]）。判定结论卡含依据明细+重测入口；任务卡显示预算进度条。内存仓库 `test-store.ts`（globalThis，含 1 个演示任务：V2/V3 双钩子达标→放量）。共享类型 `testing-types.ts`（THRESHOLDS/SOP_STAGES/HOOK_META）。
+
 ## 目录结构
 
 ```
@@ -28,6 +30,7 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 │   ├── app/
 │   │   ├── page.tsx              # 市场趋势看板（客户端组件）
 │   │   ├── products/page.tsx     # 选品库页面
+│   │   ├── testing/page.tsx      # 内容测试工作台（列表 + 详情：进度条/指标表/逐日录入/判定卡）
 │   │   ├── image-studio/page.tsx # 主图工作台（选图 → AI 解析 → 拖拽重排 → 生成）
 │   │   ├── layout.tsx            # 根布局（挂载 AppShell）
 │   │   └── api/
@@ -35,7 +38,8 @@ TikTok Shop 跨境电商选品运营后台（全中文界面），面向跨境�
 │   │       ├── products/[id]/route.ts    # GET 详情 / DELETE 单个
 │   │       ├── products/import/route.ts  # POST CSV 导入
 │   │       ├── stats/route.ts            # GET 看板统计（选品库演示数据）
-│   │       ├── trends/route.ts           # GET 真实趋势聚合（TikTok CC + Google Trends，maxDuration 300s，30min缓存）
+│   │       ├── trends/route.ts           # GET 真实趋势聚合
+│   │       ├── tests/route.ts + tests/[id]/(route|metrics|judge)  # 内容测试 CRUD/指标录入/SOP判定（TikTok CC + Google Trends，maxDuration 300s，30min缓存）
 │   │       ├── chat/route.ts             # POST AI Agent 对话（SSE 流式）
 │   │       └── image/
 │   │           ├── analyze/route.ts      # POST 主图结构解析（多模态，maxDuration 120s）
