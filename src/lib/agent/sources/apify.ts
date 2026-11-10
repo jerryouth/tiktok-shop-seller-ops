@@ -21,24 +21,47 @@ function actorId(envKey: 'APIFY_ACTOR_TT_CC' | 'APIFY_ACTOR_GOOGLE_TRENDS', fall
   return process.env[envKey]?.trim() || fallback;
 }
 
-/** 同步运行 Actor 并返回数据集条目（超时秒数透传给 Apify 平台） */
+/** 同步运行 Actor 并返回数据集条目（超时秒数透传给 Apify 平台；Actor 偶发瞬断，失败自动重试 1 次） */
 async function runActorSync<T = Record<string, unknown>>(
   actor: string,
   input: Record<string, unknown>,
   timeoutSec = 60,
 ): Promise<T[]> {
   const url = `${APIFY_BASE}/acts/${encodeURIComponent(actor)}/run-sync-get-dataset-items?token=${apifyToken()}&timeout=${timeoutSec}`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  });
-  if (!resp.ok) {
+  let lastError: unknown = null;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      });
+    } catch (e) {
+      // 网络层错误（DNS/超时/连接重置）：可重试
+      lastError = e;
+      if (attempt === 2) throw e;
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
+    if (resp.ok) {
+      const data: unknown = await resp.json().catch(() => null);
+      if (Array.isArray(data)) return data as T[];
+      // 平台侧 run-failed 等错误以 JSON 对象返回：视为可重试的服务端故障
+      lastError = new Error(`Apify Actor ${actor} 运行失败: ${JSON.stringify(data).slice(0, 200)}`);
+      if (attempt === 2) throw lastError;
+      await new Promise((r) => setTimeout(r, 3000));
+      continue;
+    }
     const text = await resp.text().catch(() => '');
-    throw new Error(`Apify Actor ${actor} 运行失败: HTTP ${resp.status} ${text.slice(0, 200)}`);
+    const err = new Error(`Apify Actor ${actor} 运行失败: HTTP ${resp.status} ${text.slice(0, 200)}`);
+    // 4xx 属于请求/鉴权错误，重试无意义
+    const retryable = resp.status >= 500 || resp.status === 429;
+    if (!retryable || attempt === 2) throw err;
+    lastError = err;
+    await new Promise((r) => setTimeout(r, 3000));
   }
-  const data: unknown = await resp.json();
-  return Array.isArray(data) ? (data as T[]) : [];
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 // ---------------------------------------------------------------------------
