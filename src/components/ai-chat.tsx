@@ -84,6 +84,8 @@ const SKILL_ICONS: Record<string, typeof Database> = {
   getSourcingDetail: PackageSearch,
   searchSourcingByImage: Search,
   getGoogleTrends: TrendingUp,
+  getTikTokRankings: BarChart3,
+  getTikTokProductDetail: PackageSearch,
 };
 
 function escapeHtml(text: string): string {

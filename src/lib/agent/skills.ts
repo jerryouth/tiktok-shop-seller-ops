@@ -22,6 +22,11 @@ import {
 } from './sources/sourcing';
 import { fetchGoogleTrends, isApifyConfigured } from './sources/apify';
 import { fetchTrendSignals } from './sources/trends';
+import {
+  getProductDetail as getEchotikProductDetail,
+  getProductRankings,
+  isEchotikConfigured,
+} from './sources/echotik';
 import type { Skill, SkillContext } from './types';
 
 const MAX_LIST = 8;
@@ -545,6 +550,103 @@ const searchSourcingByImageSkill: Skill = {
   },
 };
 
+const getTikTokRankingsSkill: Skill = {
+  name: 'getTikTokRankings',
+  description:
+    '拉取 TikTok Shop 美区商品榜单（EchoTik 真实数据）：热销榜（按周期销量增量排序）或热推榜（按带货达人数排序），含周期销量/GMV/均价/佣金率/带货达人数/视频数——冷启动选品的第一手"什么品真的在出单"数据',
+  argsDoc:
+    '{ rankType?: "day"|"week"|"month"（默认 week 周榜）, rankField?: "sales"|"influencer"（默认 sales 热销榜）, categoryId?: 一级类目ID（可选）, crossBorderOnly?: boolean（默认 false，true 只看跨境店铺） }（全部可选）',
+  async run(args) {
+    if (!isEchotikConfigured()) {
+      return {
+        data: { 已配置接口: false, 提示: '未配置 ECHOTIK_USERNAME/ECHOTIK_PASSWORD，榜单数据不可用' },
+        summary: 'EchoTik 未配置',
+      };
+    }
+    const rankTypeMap: Record<string, 1 | 2 | 3> = { day: 1, week: 2, month: 3 };
+    const rankType = rankTypeMap[asString(args.rankType) ?? 'week'] ?? 2;
+    const rankField = asString(args.rankField) === 'influencer' ? 2 : 1;
+    const crossBorder = args.crossBorderOnly === true;
+    const result = await getProductRankings({
+      rankType,
+      rankField,
+      categoryId: asString(args.categoryId),
+      fromFlag: crossBorder ? 2 : undefined,
+      limit: 10,
+    });
+    const 周期名 = rankType === 1 ? '日榜' : rankType === 2 ? '周榜' : '月榜';
+    const 榜名 = rankField === 1 ? '热销榜' : '热推榜';
+    return {
+      data: {
+        证据等级: 'A（EchoTik 商品榜单·真实销售数据）',
+        榜单: `TikTok Shop 美区${榜名}（${周期名}）`,
+        榜单日期: result.date,
+        注意: '销量/GMV 为该榜单周期内的增量数据；佣金率为达人带货佣金比例',
+        商品: result.items.map((p, i) => ({
+          排名: i + 1,
+          名称: p.name,
+          productId: p.productId,
+          均价: `$${p.avgPrice}`,
+          价格带: `$${p.minPrice}-$${p.maxPrice}`,
+          周期销量: p.periodSales,
+          周期GMV: `$${Math.round(p.periodGmv).toLocaleString()}`,
+          带货达人数: p.influencerCnt,
+          带货视频数: p.videoCnt,
+          佣金率: `${Math.round(p.commissionRate * 100)}%`,
+        })),
+      },
+      summary: `${周期名}${榜名} TOP${result.items.length} · 冠军周期销量 ${result.items[0]?.periodSales ?? 0}`,
+    };
+  },
+};
+
+const getTikTokProductDetailSkill: Skill = {
+  name: 'getTikTokProductDetail',
+  description:
+    'TikTok Shop 单品经营详情（EchoTik 真实数据）：近 1/7/30 天销量与 GMV、评分评论、佣金率、带货结构（视频/直播/达人数）——用于对榜单商品做深度验证和归因（它靠视频还是直播推起来的）',
+  argsDoc: '{ productId: 商品ID（必填，来自 getTikTokRankings 返回的 productId 字段） }',
+  async run(args) {
+    if (!isEchotikConfigured()) {
+      return {
+        data: { 已配置接口: false, 提示: '未配置 ECHOTIK_USERNAME/ECHOTIK_PASSWORD' },
+        summary: 'EchoTik 未配置',
+      };
+    }
+    const productId = asString(args.productId);
+    if (!productId) throw new Error('需要提供 productId');
+    const d = await getEchotikProductDetail(productId);
+    if (!d) return { data: { 找到: false, productId }, summary: '该商品未被 EchoTik 收录' };
+    return {
+      data: {
+        证据等级: 'A（EchoTik 商品详情·真实经营数据）',
+        名称: d.name,
+        价格带: `$${d.minPrice}-$${d.maxPrice}（均价 $${d.avgPrice}）`,
+        佣金率: `${Math.round(d.commissionRate * 100)}%`,
+        评分: d.rating ? `${d.rating}/5（${d.reviewCount} 条评论）` : '暂无评分',
+        销量趋势: {
+          近1天: d.sales1d,
+          近7天: d.sales7d,
+          近30天: d.sales30d,
+          累计: d.totalSales,
+        },
+        GMV: {
+          近7天: `$${Math.round(d.gmv7d).toLocaleString()}`,
+          近30天: `$${Math.round(d.gmv30d).toLocaleString()}`,
+          累计: `$${Math.round(d.totalGmv).toLocaleString()}`,
+        },
+        带货结构_近30天: {
+          带货视频: d.videoCnt30d,
+          带货直播: d.liveCnt30d,
+          视频达人: d.influencerVideoCnt30d,
+          直播达人: d.influencerLiveCnt30d,
+          总播放: d.views30d,
+        },
+      },
+      summary: `${d.name.slice(0, 20)} · 近7天销量 ${d.sales7d} · GMV $${Math.round(d.gmv7d)}`,
+    };
+  },
+};
+
 /** Skill 注册表：新增工具只需在此登记，提示词文档自动同步 */
 const registry = new Map<string, Skill>(
   [
@@ -560,6 +662,8 @@ const registry = new Map<string, Skill>(
     getSourcingDetailSkill,
     searchSourcingByImageSkill,
     getGoogleTrendsSkill,
+    getTikTokRankingsSkill,
+    getTikTokProductDetailSkill,
   ].map((s) => [s.name, s]),
 );
 
