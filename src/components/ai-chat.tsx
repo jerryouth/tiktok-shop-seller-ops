@@ -24,12 +24,24 @@ import {
   Search,
   ArrowUpRight,
   Square,
+  History,
+  Trash2,
+  Plus,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { EChart } from '@/components/echart';
 import type { ProductWithScore } from '@/lib/types';
+import {
+  type Conversation,
+  type StoredMessage,
+  createConversation,
+  deleteConversation,
+  loadConversations,
+  relativeTime,
+  upsertConversation,
+} from '@/lib/chat-history';
 import { build1688SearchUrl } from '@/lib/url1688';
 
 /** Agent 执行步骤（Skill 调用轨迹） */
@@ -1049,6 +1061,19 @@ export function AiChatPage() {
   const abortRef = useRef<AbortController | null>(null);
   /** 贴底跟随：用户上滚超过阈值后停止自动滚动，回到底部附近恢复 */
   const stickToBottomRef = useRef(true);
+  /** 会话历史：当前激活会话 id（null = 新会话，首条消息落库时分配） */
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const activeConvIdRef = useRef<string | null>(null);
+  const conversationsRef = useRef<Conversation[]>([]);
+  /** 从存储载入会话后跳过一次自动保存（避免载入即改写 updatedAt） */
+  const skipNextSaveRef = useRef(false);
+
+  const syncConversations = useCallback((list: Conversation[]) => {
+    conversationsRef.current = list;
+    setConversations(list);
+  }, []);
 
   // 挂载时加载商品数据（兼容旧协议 [PRODUCT:id] 与库内 ID 卡片渲染）
   useEffect(() => {
@@ -1057,6 +1082,56 @@ export function AiChatPage() {
       .then((data) => setProducts(data.items || []))
       .catch(() => {});
   }, []);
+
+  // 挂载时载入历史会话，自动恢复最近一个会话（继续上下文）
+  useEffect(() => {
+    const list = loadConversations();
+    conversationsRef.current = list;
+    setConversations(list);
+    const latest = list[0];
+    if (latest && latest.messages.length > 0) {
+      skipNextSaveRef.current = true;
+      activeConvIdRef.current = latest.id;
+      setActiveConvId(latest.id);
+      setMessages(latest.messages.map((m) => ({ ...m })));
+      stickToBottomRef.current = true;
+    }
+  }, []);
+
+  // 会话自动持久化：流式结束/停止/出错后落库（流式期间跳过）
+  useEffect(() => {
+    if (isStreaming || messages.length === 0) return;
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
+      return;
+    }
+    let convId = activeConvIdRef.current;
+    let newTitle: string | undefined;
+    if (!convId) {
+      const firstUser = messages.find((m) => m.role === 'user');
+      const conv = createConversation(firstUser?.content ?? '新会话');
+      convId = conv.id;
+      newTitle = conv.title;
+      activeConvIdRef.current = convId;
+      setActiveConvId(convId);
+    }
+    const existing = conversationsRef.current.find((c) => c.id === convId);
+    const stored: StoredMessage[] = messages.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      stopped: m.stopped,
+      steps: m.steps?.map((s) => ({ ...s, status: 'done' as const })),
+    }));
+    const updated = upsertConversation({
+      id: convId,
+      title: existing?.title ?? newTitle ?? '新会话',
+      createdAt: existing?.createdAt ?? Date.now(),
+      updatedAt: Date.now(),
+      messages: stored,
+    });
+    syncConversations(updated);
+  }, [messages, isStreaming, syncConversations]);
 
   useEffect(() => {
     if (stickToBottomRef.current) {
@@ -1252,26 +1327,136 @@ export function AiChatPage() {
 
   const resetChat = () => {
     abortRef.current?.abort();
+    activeConvIdRef.current = null;
+    setActiveConvId(null);
     setMessages([]);
     setInput('');
     setIsStreaming(false);
   };
 
+  /** 切换到历史会话（续聊：历史消息会随下次提问一起作为上下文发送） */
+  const switchConversation = (id: string) => {
+    if (id === activeConvIdRef.current) {
+      setHistoryOpen(false);
+      return;
+    }
+    abortRef.current?.abort();
+    setIsStreaming(false);
+    const conv = conversationsRef.current.find((c) => c.id === id);
+    if (!conv) return;
+    skipNextSaveRef.current = true;
+    activeConvIdRef.current = id;
+    setActiveConvId(id);
+    setMessages(conv.messages.map((m) => ({ ...m, streaming: false })));
+    stickToBottomRef.current = true;
+    setHistoryOpen(false);
+  };
+
+  const removeConversation = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const list = deleteConversation(id);
+    syncConversations(list);
+    if (activeConvIdRef.current === id) {
+      abortRef.current?.abort();
+      activeConvIdRef.current = null;
+      setActiveConvId(null);
+      setMessages([]);
+      setIsStreaming(false);
+    }
+  };
+
   return (
-    <div className="flex h-full flex-col bg-[#fafbfc]">
-      {/* 页面头部 */}
-      <div className="flex items-center justify-between border-b border-zinc-200 bg-white px-5 py-3">
-        <div className="flex items-center gap-2.5">
-          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#00b8b0]/10">
-            <Sparkles className="h-4.5 w-4.5 text-[#00b8b0]" />
+    <div className="relative flex h-full bg-[#fafbfc]">
+      {/* 历史会话侧栏（移动端为覆盖式抽屉） */}
+      <aside
+        className={
+          historyOpen
+            ? 'absolute inset-y-0 left-0 z-20 flex w-60 shrink-0 flex-col border-r border-zinc-200 bg-white shadow-xl lg:static lg:shadow-none'
+            : 'hidden w-60 shrink-0 flex-col border-r border-zinc-200 bg-white lg:flex'
+        }
+      >
+        <div className="flex items-center justify-between border-b border-zinc-100 px-3 py-3">
+          <span className="flex items-center gap-1.5 text-[13px] font-semibold text-zinc-700">
+            <History className="h-3.5 w-3.5 text-zinc-400" />
+            历史会话
           </span>
-          <div>
-            <h1 className="text-[15px] font-semibold text-zinc-900">AI 选品 · 老K</h1>
-            <p className="text-[11px] text-zinc-400">
-              顶级选品总监 Agent · 趋势 × 货源 × 利润测算
-            </p>
-          </div>
+          <button
+            onClick={() => {
+              resetChat();
+              setHistoryOpen(false);
+            }}
+            className="flex items-center gap-1 rounded-md border border-[#00b8b0]/30 px-2 py-1 text-[11px] text-[#00a19a] transition-colors hover:bg-[#00b8b0]/5"
+          >
+            <Plus className="h-3 w-3" />
+            新对话
+          </button>
         </div>
+        <div className="flex-1 space-y-1 overflow-y-auto p-2">
+          {conversations.length === 0 && (
+            <p className="px-2 py-8 text-center text-xs text-zinc-400">
+              暂无历史会话
+              <br />
+              对话会自动保存在本地
+            </p>
+          )}
+          {conversations.map((c) => (
+            <div
+              key={c.id}
+              onClick={() => switchConversation(c.id)}
+              className={`group w-full cursor-pointer rounded-lg px-2.5 py-2 transition-colors ${
+                c.id === activeConvId
+                  ? 'bg-[#00b8b0]/10'
+                  : 'hover:bg-zinc-50'
+              }`}
+            >
+              <div className="flex items-center justify-between gap-1.5">
+                <span
+                  className={`min-w-0 flex-1 truncate text-[13px] ${
+                    c.id === activeConvId
+                      ? 'font-medium text-[#00a19a]'
+                      : 'text-zinc-700'
+                  }`}
+                >
+                  {c.title}
+                </span>
+                <span
+                  onClick={(e) => removeConversation(c.id, e)}
+                  title="删除会话"
+                  className="hidden shrink-0 rounded p-0.5 text-zinc-400 hover:bg-zinc-100 hover:text-[#fe2c55] group-hover:block"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </span>
+              </div>
+              <div className="mt-0.5 text-[11px] text-zinc-400">
+                {relativeTime(c.updatedAt)} · {c.messages.length} 条
+              </div>
+            </div>
+          ))}
+        </div>
+      </aside>
+
+      {/* 聊天主列 */}
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        {/* 页面头部 */}
+        <div className="flex items-center justify-between border-b border-zinc-200 bg-white px-5 py-3">
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setHistoryOpen((v) => !v)}
+              className="rounded-lg p-1.5 text-zinc-500 transition-colors hover:bg-zinc-100 lg:hidden"
+              title="历史会话"
+            >
+              <History className="h-4.5 w-4.5" />
+            </button>
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#00b8b0]/10">
+              <Sparkles className="h-4.5 w-4.5 text-[#00b8b0]" />
+            </span>
+            <div>
+              <h1 className="text-[15px] font-semibold text-zinc-900">AI 选品 · 老K</h1>
+              <p className="text-[11px] text-zinc-400">
+                顶级选品总监 Agent · 趋势 × 货源 × 利润测算
+              </p>
+            </div>
+          </div>
         <Button
           variant="outline"
           size="sm"
@@ -1382,8 +1567,9 @@ export function AiChatPage() {
           )}
         </form>
         <p className="mx-auto mt-1.5 w-full max-w-3xl text-[10px] text-zinc-300">
-          Enter 发送 · Shift+Enter 换行 · 生成中可随时停止
+          Enter 发送 · Shift+Enter 换行 · 生成中可随时停止 · 会话自动保存在本地
         </p>
+      </div>
       </div>
     </div>
   );
