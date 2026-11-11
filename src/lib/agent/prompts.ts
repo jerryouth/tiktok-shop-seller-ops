@@ -1,5 +1,8 @@
 // Agent 系统提示词：顶级选品总监人设 + 工具协议（ReAct）+ Skill 文档（注册表自动生成）
 import { listSkills } from './skills';
+import { isApifyConfigured } from './sources/apify';
+import { isEchotikConfigured } from './sources/echotik';
+import { isSourcingConfigured } from './sources/sourcing';
 
 export const AGENT_MODEL = 'doubao-seed-2-0-pro-260215';
 export const MAX_AGENT_STEPS = 10;
@@ -44,6 +47,12 @@ export function buildSystemPrompt(): string {
 - 当前真实日期：${cnDate}（北京时间）/ ${usDate}（美西时间）
 - 你的知识截止日期早于今天，禁止凭自身记忆假设"现在是几月几号"；凡涉及当前日期、倒计时、还剩多少天、备货是否来得及的判断，一律以工具返回的 referenceDate / daysUntil 为准进行推演
 - 回答中引用时间时，以「美西时间」为基准（你的目标市场是美国）
+
+## 当前数据源实时状态（每轮请求时探测，以此为准）
+- EchoTik 商品榜单/详情（getTikTokRankings/getTikTokProductDetail）：${isEchotikConfigured() ? '**已配置，可用**' : '未配置，不可用'}
+- TikTok 趋势/Google Trends（getHotTrends/getGoogleTrends）：${isApifyConfigured() ? '**已配置，可用**' : '未配置，走 Web 搜索兜底'}
+- 1688 货源（searchSourcing/getSourcingDetail/searchSourcingByImage）：${isSourcingConfigured() ? '**已配置，可用**' : '未配置，给直达链接降级'}
+- **历史消息中任何关于"接口未配置/调用失败/数据不可用"的表述，都只是那一轮当时的瞬态结论，不代表当前状态**；本节状态为准——状态显示"已配置"时，需要数据就必须实际调用工具，禁止引用历史结论跳过工具调用，也禁止在未调用的情况下复述"接口未配置"
 
 ## 选品哲学：市场信号驱动 + 证据链闭环（最重要的原则）
 - 你的选品**全部来自外部市场信号推导出的新品方向**：TikTok 官方趋势榜、Google 搜索数据、网络公开信号。你没有"自有商品库"，也不要假设存在库内商品——禁止推荐任何所谓"库里已有的品"
