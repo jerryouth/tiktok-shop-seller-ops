@@ -24,6 +24,7 @@ import {
   Search,
   ArrowUpRight,
   Square,
+  ShoppingBag,
   History,
   Trash2,
   Plus,
@@ -319,8 +320,22 @@ interface RecommendItem {
   keyword?: string; // 1688 找货搜索词
 }
 
+/** 真实在售商品（<products> 协议，来自 EchoTik 榜单/详情工具，字段为事实数据） */
+interface TikTokProduct {
+  name: string; // 商品名（英文原文）
+  productId?: string; // TikTok Shop 商品 ID
+  image?: string; // 商品封面图
+  price?: string; // 在售均价，如 $24.18
+  sales?: number; // 榜单周期销量
+  gmv?: string; // 周期 GMV，如 $540,589
+  commission?: string; // 佣金率，如 10%
+  influencers?: number; // 带货达人数
+  note?: string; // 老K 一句话解读
+}
+
 type ContentBlock =
   | { kind: 'text'; text: string }
+  | { kind: 'products'; items: TikTokProduct[] }
   | { kind: 'product'; id: string }
   | { kind: 'chart'; spec: ChartSpec }
   | { kind: 'cards'; items: RecommendItem[] }
@@ -420,6 +435,31 @@ function parseRecommendItems(raw: unknown): RecommendItem[] {
     .slice(0, 5);
 }
 
+/** 宽松解析 <products> 真实商品数组：字段缺失容错，name 必填 */
+function parseTikTokProducts(raw: unknown): TikTokProduct[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((it): TikTokProduct | null => {
+      if (typeof it !== 'object' || it === null) return null;
+      const r = it as Record<string, unknown>;
+      if (typeof r.name !== 'string' || !r.name.trim()) return null;
+      const p: TikTokProduct = { name: r.name.trim() };
+      if (typeof r.productId === 'string' && r.productId) p.productId = r.productId;
+      if (typeof r.image === 'string' && /^https?:\/\//.test(r.image)) p.image = r.image;
+      if (typeof r.price === 'string') p.price = r.price;
+      if (typeof r.sales === 'number' && Number.isFinite(r.sales)) p.sales = r.sales;
+      else if (typeof r.sales === 'string' && Number.isFinite(Number(r.sales))) p.sales = Number(r.sales);
+      if (typeof r.gmv === 'string') p.gmv = r.gmv;
+      if (typeof r.commission === 'string') p.commission = r.commission;
+      if (typeof r.influencers === 'number' && Number.isFinite(r.influencers)) p.influencers = r.influencers;
+      else if (typeof r.influencers === 'string' && Number.isFinite(Number(r.influencers))) p.influencers = Number(r.influencers);
+      if (typeof r.note === 'string') p.note = r.note;
+      return p;
+    })
+    .filter((p): p is TikTokProduct => p !== null)
+    .slice(0, 6);
+}
+
 /** 文本段按 [PRODUCT:id] 拆分为文本块与商品块 */
 function pushTextBlocks(blocks: ContentBlock[], text: string): void {
   for (const part of text.split(/(\[PRODUCT:[^\]]+\])/g)) {
@@ -429,7 +469,7 @@ function pushTextBlocks(blocks: ContentBlock[], text: string): void {
   }
 }
 
-const BLOCK_RE = /<(chart|cards)>([\s\S]*?)(<\/\1>|$)/g;
+const BLOCK_RE = /<(chart|cards|products)>([\s\S]*?)(<\/\1>|$)/g;
 
 /** 把消息内容解析为有序块：文本 / 内联商品 / 图表 / 推荐卡片 / 流式占位 */
 function parseBlocks(content: string, streaming?: boolean): ContentBlock[] {
@@ -445,7 +485,7 @@ function parseBlocks(content: string, streaming?: boolean): ContentBlock[] {
       if (streaming) {
         blocks.push({
           kind: 'pending',
-          label: tag === 'cards' ? '正在生成推荐卡片…' : '正在生成图表…',
+          label: tag === 'cards' ? '正在生成推荐卡片…' : tag === 'products' ? '正在整理在售商品…' : '正在生成图表…',
         });
       }
     } else {
@@ -464,6 +504,16 @@ function parseBlocks(content: string, streaming?: boolean): ContentBlock[] {
           blocks.push({
             kind: 'text',
             text: `> 图表数据格式异常，以下为模型原始输出：\n\n\`\`\`json\n${m[2].slice(0, 600)}\n\`\`\``,
+          });
+        }
+      } else if (tag === 'products') {
+        const items = parseTikTokProducts(raw);
+        if (items.length) {
+          blocks.push({ kind: 'products', items });
+        } else {
+          blocks.push({
+            kind: 'text',
+            text: `> 在售商品数据格式异常，以下为模型原始输出：\n\n\`\`\`json\n${m[2].slice(0, 600)}\n\`\`\``,
           });
         }
       } else {
@@ -632,6 +682,71 @@ function ChatChart({ spec }: { spec: ChartSpec }) {
           数据来源：{spec.source}
         </p>
       )}
+    </div>
+  );
+}
+
+/** <products> 协议渲染：真实在售商品墙（冷启动核心——看得见摸得着的在卖商品） */
+function TikTokProductCards({ items }: { items: TikTokProduct[] }) {
+  if (!items.length) return null;
+  return (
+    <div className="rounded-xl border border-zinc-200 bg-white p-3 shadow-sm">
+      <p className="mb-2 flex items-center gap-1.5 text-[12px] font-semibold text-zinc-800">
+        <ShoppingBag className="h-3.5 w-3.5 text-[#fe2c55]" />
+        美区真实在售商品 · EchoTik 榜单
+      </p>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {items.map((p, i) => (
+          <div
+            key={p.productId || i}
+            className="group overflow-hidden rounded-lg border border-zinc-100 bg-zinc-50/50 transition-colors hover:border-[#00b8b0]/40"
+          >
+            <div className="relative aspect-square bg-zinc-100">
+              {p.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={p.image}
+                  alt={p.name}
+                  loading="lazy"
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-zinc-300">
+                  <ShoppingBag className="h-8 w-8" />
+                </div>
+              )}
+              {p.commission && (
+                <span className="absolute right-1 top-1 rounded bg-black/55 px-1.5 py-0.5 text-[10px] font-medium text-white">
+                  佣金 {p.commission}
+                </span>
+              )}
+            </div>
+            <div className="p-2">
+              <p className="line-clamp-2 min-h-[32px] text-[11px] font-medium leading-4 text-zinc-800">
+                {p.name}
+              </p>
+              <div className="mt-1.5 flex items-baseline justify-between">
+                <span className="text-[13px] font-bold text-[#fe2c55]">{p.price || '-'}</span>
+                {p.sales !== undefined && (
+                  <span className="text-[10px] text-zinc-500">
+                    周期销量 <span className="font-semibold text-zinc-700">{p.sales.toLocaleString()}</span>
+                  </span>
+                )}
+              </div>
+              <div className="mt-1 flex flex-wrap gap-x-2 text-[10px] text-zinc-400">
+                {p.gmv && <span>GMV {p.gmv}</span>}
+                {p.influencers !== undefined && <span>{p.influencers.toLocaleString()} 达人带货</span>}
+              </div>
+              {p.note && (
+                <p className="mt-1.5 rounded bg-[#00b8b0]/8 px-1.5 py-1 text-[10px] leading-4 text-[#00b8b0]">
+                  {p.note}
+                </p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[10px] text-zinc-400">销量/GMV 为榜单统计周期内增量（EchoTik 收录数据，存在延迟）</p>
     </div>
   );
 }
@@ -823,6 +938,8 @@ function BlockList({
             return <ChatChart key={i} spec={b.spec} />;
           case 'cards':
             return <RecommendCards key={i} items={b.items} lookup={lookup} />;
+          case 'products':
+            return <TikTokProductCards key={i} items={b.items} />;
           case 'pending':
             return (
               <div
@@ -875,12 +992,13 @@ function AssistantMessageBody({
   }, [allProducts]);
 
   const cardBlocks = blocks.filter((b) => b.kind === 'cards');
+  const productBlocks = blocks.filter((b) => b.kind === 'products');
   const chartBlocks = blocks.filter((b) => b.kind === 'chart');
   const textBlocks = blocks.filter(
     (b) => b.kind === 'text' || b.kind === 'product' || b.kind === 'pending',
   );
   const steps = msg.steps ?? [];
-  const rich = cardBlocks.length > 0 || chartBlocks.length > 0 || steps.length > 0;
+  const rich = cardBlocks.length > 0 || productBlocks.length > 0 || chartBlocks.length > 0 || steps.length > 0;
 
   // 简单回复：纯文本
   if (!rich) {
@@ -930,8 +1048,9 @@ function AssistantMessageBody({
         </TabsTrigger>
       </TabsList>
 
-      {/* 选品方案：推荐卡片置顶 + 详细分析正文 */}
+      {/* 选品方案：真实在售商品墙置顶 → 推荐方向卡 → 详细分析正文 */}
       <TabsContent value="plan" className="mt-2.5 space-y-2.5">
+        {productBlocks.length > 0 && <BlockList blocks={productBlocks} lookup={lookup} />}
         {cardBlocks.length > 0 && (
           <div>
             <p className="mb-1.5 flex items-center gap-1 text-[11px] font-semibold text-zinc-500">
@@ -943,7 +1062,7 @@ function AssistantMessageBody({
         )}
         {textBlocks.length > 0 && (
           <div>
-            {cardBlocks.length > 0 && (
+            {(cardBlocks.length > 0 || productBlocks.length > 0) && (
               <p className="mb-1.5 border-t border-zinc-100 pt-2 text-[11px] font-semibold text-zinc-500">
                 详细分析
               </p>
